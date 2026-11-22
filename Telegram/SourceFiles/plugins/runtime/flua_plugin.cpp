@@ -1162,6 +1162,12 @@ std::optional<mtpBuffer> Plugin::mtprotoResponse(
 }
 
 RawResult Plugin::mtprotoUpdates(const mtpBuffer &updates) {
+	// The session passes new_session_created here as well: it is a service
+	// message of the transport, not an Updates of api.tl.
+	if (updates.empty()
+		|| mtpTypeId(updates[0]) == mtpc_new_session_created) {
+		return {};
+	}
 	const auto type = Tl::Boxed("Updates");
 	if (!type.valid()) {
 		return {};
