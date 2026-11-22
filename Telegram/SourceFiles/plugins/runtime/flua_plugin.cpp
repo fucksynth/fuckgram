@@ -81,6 +81,8 @@ constexpr auto kMaxJsonDepth = 64;
 constexpr auto kMaxInvokes = 32;
 constexpr auto kMaxInput = 4096;
 constexpr auto kMaxDelete = 100;
+constexpr auto kMaxFile = qint64(16 * 1024 * 1024);
+constexpr auto kMaxFiles = qint64(64 * 1024 * 1024); // all files of a plugin
 
 void PushString(lua_State *L, const QString &value) {
 	const auto utf8 = value.toUtf8();
@@ -529,6 +531,13 @@ void Plugin::registerApi() {
 	set("get", &Plugin::ApiSettingsGet);
 	set("set", &Plugin::ApiSettingsSet);
 	lua_setfield(_lua, -2, "settings");
+	set("resource", &Plugin::ApiResource);
+	lua_newtable(_lua);
+	set("read", &Plugin::ApiFileRead);
+	set("write", &Plugin::ApiFileWrite);
+	set("remove", &Plugin::ApiFileRemove);
+	set("list", &Plugin::ApiFileList);
+	lua_setfield(_lua, -2, "files");
 	lua_setglobal(_lua, "plugin");
 
 	// tg = { log, toast, messages = { send }, compose = { get, set },
@@ -2292,6 +2301,98 @@ int Plugin::ApiCopy(lua_State *L) {
 		QGuiApplication::clipboard()->setText(text);
 	});
 	return 0;
+}
+
+// Package resources and the plugin's own files.
+
+// plugin.resource("icon.png") -> bytes of resources/icon.png or nil.
+int Plugin::ApiResource(lua_State *L) {
+	const auto plugin = From(L);
+	const auto path = CheckString(L, 1);
+	const auto &files = plugin->_package.files;
+	const auto i = files.find(u"resources/"_q + path);
+	if (i == end(files)) {
+		lua_pushnil(L);
+	} else {
+		lua_pushlstring(L, i->second.constData(), size_t(i->second.size()));
+	}
+	return 1;
+}
+
+QString Plugin::filePath(lua_State *L, int index) const {
+	const auto name = CheckString(L, index);
+	static const auto check = QRegularExpression(
+		u"^[A-Za-z0-9_][A-Za-z0-9_.\\-]{0,63}$"_q);
+	if (!check.match(name).hasMatch() || name.contains(u".."_q)) {
+		luaL_error(
+			L,
+			"bad file name: %s (use 1-64 of A-Z a-z 0-9 _ . -)",
+			name.toUtf8().constData());
+	}
+	return _dataPath + u"files/"_q + name;
+}
+
+int Plugin::ApiFileRead(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermStorage);
+	auto file = QFile(plugin->filePath(L, 1));
+	if (file.size() > kMaxFile || !file.open(QIODevice::ReadOnly)) {
+		lua_pushnil(L);
+		return 1;
+	}
+	const auto bytes = file.readAll();
+	lua_pushlstring(L, bytes.constData(), size_t(bytes.size()));
+	return 1;
+}
+
+int Plugin::ApiFileWrite(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermStorage);
+	const auto path = plugin->filePath(L, 1);
+	auto size = size_t(0);
+	const auto data = luaL_checklstring(L, 2, &size);
+	if (qint64(size) > kMaxFile) {
+		return luaL_error(L, "a file is limited to 16 MB");
+	}
+	const auto folder = QFileInfo(path).absolutePath();
+	auto total = qint64(size);
+	const auto others = QDir(folder).entryInfoList(QDir::Files);
+	for (const auto &info : others) {
+		if (info.absoluteFilePath() != QFileInfo(path).absoluteFilePath()) {
+			total += info.size();
+		}
+	}
+	if (total > kMaxFiles) {
+		return luaL_error(L, "the files of a plugin are limited to 64 MB");
+	}
+	QDir().mkpath(folder);
+	auto file = QFile(path);
+	const auto written = file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+		&& (file.write(data, qint64(size)) == qint64(size));
+	lua_pushboolean(L, written ? 1 : 0);
+	return 1;
+}
+
+int Plugin::ApiFileRemove(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermStorage);
+	lua_pushboolean(L, QFile::remove(plugin->filePath(L, 1)) ? 1 : 0);
+	return 1;
+}
+
+int Plugin::ApiFileList(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermStorage);
+	const auto names = QDir(plugin->_dataPath + u"files/"_q).entryList(
+		QDir::Files,
+		QDir::Name);
+	lua_createtable(L, int(names.size()), 0);
+	auto index = lua_Integer(0);
+	for (const auto &name : names) {
+		PushString(L, name);
+		lua_rawseti(L, -2, ++index);
+	}
+	return 1;
 }
 
 } // namespace Plugins::Flua

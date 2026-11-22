@@ -129,6 +129,30 @@ function plugin.settings.get(key, default) end
 ---@param value boolean|number|string|nil
 function plugin.settings.set(key, value) end
 
+---Bytes of resources/<path> from the package, nil if there is none.
+---@param path string
+---@return string?
+function plugin.resource(path) end
+
+---The plugin's own files in plugins_data/<id>/files/.
+plugin.files = {}
+
+---@param name string 1-64 of A-Z a-z 0-9 _ . -
+---@return string? bytes
+function plugin.files.read(name) end
+
+---@param name string
+---@param bytes string up to 16 MB, 64 MB for all files
+---@return boolean written
+function plugin.files.write(name, bytes) end
+
+---@param name string
+---@return boolean removed
+function plugin.files.remove(name) end
+
+---@return string[] names
+function plugin.files.list() end
+
 tg = {}
 
 ---Writes to the client log.

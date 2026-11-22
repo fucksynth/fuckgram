@@ -74,6 +74,8 @@ off and opens the plugins folder.
 | `plugin.on("profile.rows", fn(peer))` | `ui` | return `{ { label = ..., value = ... }, ... }` to add rows to a profile |
 | `plugin.menu(place, text, fn(ctx))` | `ui` | menu item; `place` is `message`, `main`, `chat` or `profile`; `ctx.peer`, `ctx.message` |
 | `plugin.settings.get(key, default)`, `.set(key, value)` | `storage` | small values kept between runs |
+| `plugin.resource(path)` | — | bytes of `resources/<path>` from the package, `nil` if there is none; read-only |
+| `plugin.files.read(name)`, `.write(name, bytes)`, `.remove(name)`, `.list()` | `storage` | the plugin's own files in `plugins_data/<id>/files/` (names of `A-Z a-z 0-9 _ . -`, up to 16 MB each and 64 MB in all); copy a database from `resources/` here to change it |
 | `tg.toast(text)` | `ui` | short notice in the window |
 | `tg.messages.send(peer, text, options)` | `messages.send` | send a text message; `options`: `reply_to` (message id), `silent`, `schedule` (unixtime) |
 | `tg.messages.edit(peer, id, text)` | `messages.manage` | edit a message you may edit |

@@ -150,6 +150,13 @@ private:
 	static int ApiConfirm(lua_State *L);
 	static int ApiInput(lua_State *L);
 	static int ApiCopy(lua_State *L);
+	static int ApiResource(lua_State *L);
+	static int ApiFileRead(lua_State *L);
+	static int ApiFileWrite(lua_State *L);
+	static int ApiFileRemove(lua_State *L);
+	static int ApiFileList(lua_State *L);
+	// plugins_data/<id>/files/<name> for a checked name, raises otherwise.
+	[[nodiscard]] QString filePath(lua_State *L, int index) const;
 
 	// Where the answer of an async call goes: a callback or the coroutine
 	// that called it. Of an older run it is dropped.
