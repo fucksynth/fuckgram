@@ -2,8 +2,9 @@
 
 Status: **in development.** The Lua runtime (API version 1) is in the
 client: it checks every package by analysing its code, loads plugins, runs
-them in a sandbox and connects them to the hooks. Raw MTProto access from Lua
-and the `.flua` catalog are not done yet.
+them in a sandbox and connects them to the hooks, including raw MTProto
+requests, responses and updates decoded with the TL schema. The `.flua`
+catalog is not done yet.
 
 ## Writing a plugin (API 1)
 
@@ -11,8 +12,9 @@ A plugin is a folder or a `.flua` archive (zip) with `manifest.json` at its
 root. Put it into `plugins/` next to `tdata` (portable) or in the fuckgram data
 folder, then restart. Settings → Plugins lists what is loaded and the last
 error of each plugin. Examples: [`examples/plugins/hello`](../examples/plugins/hello) (send filter,
-menus, settings) and [`examples/plugins/weather`](../examples/plugins/weather)
-(`tg.async` + HTTP).
+menus, settings), [`examples/plugins/weather`](../examples/plugins/weather)
+(`tg.async` + HTTP) and [`examples/plugins/raw`](../examples/plugins/raw)
+(`tg.invoke`, MTProto filters).
 
 Pack a folder with `python tools/flua_pack.py <folder>`: it checks the
 manifest and writes `<id>.flua`. The code check below runs in the client.
@@ -74,6 +76,10 @@ off and opens the plugins folder.
 | `tg.http.request{ url, method, headers, body }` | `net:<host>` | HTTPS only, to declared hosts (`net:api.example.com`, `net:*.example.com`); returns `{ status, body, headers, error }`; no automatic redirects; pass a callback as the 2nd argument instead of using `tg.async` |
 | `tg.timer.after(ms, fn)`, `tg.timer.every(ms, fn)`, `tg.timer.cancel(id)` | — | one-shot and repeating timers (repeating ≥ 100 ms, up to 64) |
 | `tg.json.encode(value)`, `tg.json.decode(text)` | — | JSON ↔ Lua tables; `decode` returns `nil, error` on bad input |
+| `tg.invoke(call)` | `mtproto` | any API method: `local r, err = tg.invoke{ _ = "help.getNearestDc" }` inside `tg.async`, or pass a callback `fn(result, err)` as the 2nd argument; `err` is `{ code, type, description }` |
+| `plugin.on("mtproto.request", fn(call), methods)` | `mtproto` | every request the client sends; return `false` to cancel it (the caller gets `PLUGIN_CANCELLED`), a table to send instead, `nil` to keep |
+| `plugin.on("mtproto.response", fn(result, method), methods)` | `mtproto` | every answer (also `rpc_error`) before the client sees it; return a value to replace it |
+| `plugin.on("mtproto.updates", fn(updates))` | `mtproto` | raw updates container; return `false` to drop it, a table to replace it |
 | `tg.log(...)`, `print(...)` | — | write to the client log |
 | `require("source.module")` | — | load `source/module.lua` or `lib/module.lua` from the package |
 | global `on_enable()`, `on_disable()` | — | called after the entry file ran and before the plugin stops |
@@ -81,6 +87,51 @@ off and opens the plugins folder.
 `msg` is `{ id, peer, from, text, out, date }`. Chat ids are written as in the
 Bot API: users `> 0`, basic groups `< 0`, channels and supergroups
 `-100…`.
+
+### Raw MTProto
+
+`mtproto` is full access to the account, the install window says so in
+capitals. Objects are Lua tables with the constructor name in `_`, exactly as
+in the [schema](../Telegram/SourceFiles/mtproto/scheme/api.tl) of the client's
+layer:
+
+```lua
+tg.async(function()
+    local history, err = tg.invoke{
+        _ = "messages.getHistory",
+        peer = { _ = "inputPeerSelf" },
+        offset_id = 0, offset_date = 0, add_offset = 0,
+        limit = 10, max_id = 0, min_id = 0, hash = 0,
+    }
+    if history then
+        tg.log(#history.messages, "messages")
+    else
+        tg.log("failed:", err.type)
+    end
+end)
+
+-- Never tell anyone we are typing.
+plugin.on("mtproto.request", function(call)
+    return false
+end, { "messages.setTyping" })
+```
+
+- `int` and `long` are integers, `double` a number, `string` and `bytes`
+  strings, `int128` / `int256` strings of 16 / 32 bytes, `Bool` a boolean,
+  `Vector<T>` an array.
+- Optional fields are `nil` when absent; `flags.N?true` fields are `true` or
+  `nil`. `flags` themselves are computed when a table is written and are not
+  shown when one is read.
+- `_` may be left out for a type with one constructor. A missing required
+  field, an unknown field or a constructor of the wrong type is an error with
+  its path: `peer.user_id: expected an integer, got string`.
+- The method list of `mtproto.request` / `mtproto.response` is checked
+  against the schema and keeps the other calls out of Lua: without it every
+  request or response is decoded, which costs time on big answers. Methods
+  are matched through wrappers: `invokeWithTakeout(messages.getHistory)` is
+  `messages.getHistory`.
+- Filters of plugins never see `tg.invoke` calls of plugins, so a filter can't
+  loop on its own requests. Up to 32 calls of one plugin wait at a time.
 
 The sandbox has `string` (no `dump`), `table`, `math`, `utf8`, `coroutine` and
 `os.time` / `os.clock` / `os.date` / `os.difftime`. There is no `io`, no

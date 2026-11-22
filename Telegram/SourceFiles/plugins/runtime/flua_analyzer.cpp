@@ -90,6 +90,7 @@ const ApiEntry kApi[] = {
 	{ "tg.compose.get", ApiType::Function, kPermCompose },
 	{ "tg.compose.set", ApiType::Function, kPermCompose },
 	{ "tg.ui.refresh", ApiType::Function, kPermDisplay },
+	{ "tg.invoke", ApiType::Function, kPermMtproto },
 	{ "plugin.on", ApiType::Function, nullptr },
 	{ "plugin.menu", ApiType::Function, kPermUi },
 	{ "plugin.settings.get", ApiType::Function, kPermStorage },
@@ -114,6 +115,9 @@ const EventEntry kEvents[] = {
 	{ "display", kPermDisplay },
 	{ "screen", kPermChatsRead },
 	{ "profile.rows", kPermUi },
+	{ "mtproto.request", kPermMtproto },
+	{ "mtproto.response", kPermMtproto },
+	{ "mtproto.updates", kPermMtproto },
 };
 
 const char *kMenuPlaces[] = { "message", "main", "chat", "profile" };

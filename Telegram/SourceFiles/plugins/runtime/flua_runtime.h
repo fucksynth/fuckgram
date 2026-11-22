@@ -34,6 +34,10 @@ public:
 	// the hooks in use.
 	void refreshHooks();
 
+	// tg.invoke calls: the filters of plugins skip them.
+	void ownRequest(mtpRequestId requestId, mtpTypeId method);
+	void forgetOwnRequest(mtpRequestId requestId);
+
 	SendTextResult sendText(const SendTextRequest &request) override;
 	void newMessage(not_null<HistoryItem*> item) override;
 	bool openUrl(const QString &url, bool local) override;
@@ -56,6 +60,14 @@ public:
 	void profileRows(
 		not_null<PeerData*> peer,
 		std::vector<ProfileRow> &rows) override;
+	RawResult request(const RawRequest &request) override;
+	std::optional<mtpBuffer> response(
+		not_null<MTP::Instance*> instance,
+		mtpRequestId requestId,
+		const mtpBuffer &reply) override;
+	RawResult updates(
+		not_null<MTP::Instance*> instance,
+		const mtpBuffer &updates) override;
 	bool hasPluginManager() override;
 	void openPluginManager(Window::SessionController *controller) override;
 
@@ -72,7 +84,12 @@ private:
 	void loadDisabled();
 	void saveDisabled();
 
+	static constexpr auto kMaxWatched = size_t(4096);
+
 	std::vector<std::unique_ptr<Plugin>> _plugins;
+	// Requests in flight -> their method, to decode the responses.
+	std::map<mtpRequestId, mtpTypeId> _methods;
+	base::flat_map<mtpRequestId, mtpTypeId> _own;
 	std::vector<Invalid> _invalid;
 	base::flat_set<QString> _disabled;
 

@@ -10,6 +10,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "data/data_peer_id.h"
 #include "plugins/plugins_hooks.h"
 #include "plugins/runtime/flua_package.h"
+#include "plugins/runtime/flua_tl.h"
 
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
@@ -22,6 +23,10 @@ class QNetworkReply;
 
 class HistoryItem;
 class PeerData;
+
+namespace MTP {
+class Error;
+} // namespace MTP
 
 namespace Plugins::Flua {
 
@@ -36,6 +41,13 @@ enum class Event {
 	Display,     // plugin.on("display", fn(shown)) -> text replaces it
 	Screen,      // plugin.on("screen", fn(screen))
 	ProfileRows, // plugin.on("profile.rows", fn(peer)) -> { {label, value} }
+
+	// Raw MTProto, decoded with the TL schema. An optional third argument
+	// of plugin.on() lists the methods a handler wants, e.g.
+	// plugin.on("mtproto.request", fn, { "messages.sendMessage" }).
+	MtprotoRequest,  // fn(call) -> nil | false (cancel) | call (replace)
+	MtprotoResponse, // fn(result, method) -> nil | value (replace)
+	MtprotoUpdates,  // fn(updates) -> nil | false (drop) | updates
 
 	Count,
 };
@@ -92,6 +104,16 @@ public:
 	void screen(Plugins::Screen screen, PeerData *peer);
 	void profileRows(not_null<PeerData*> peer, std::vector<ProfileRow> &rows);
 
+	// Some handler of the event takes this method (0: unknown method).
+	[[nodiscard]] bool wants(Event event, mtpTypeId method) const;
+	[[nodiscard]] RawResult mtprotoRequest(
+		const mtpBuffer &body,
+		mtpTypeId method);
+	[[nodiscard]] std::optional<mtpBuffer> mtprotoResponse(
+		const mtpBuffer &reply,
+		mtpTypeId method);
+	[[nodiscard]] RawResult mtprotoUpdates(const mtpBuffer &updates);
+
 private:
 	[[nodiscard]] static Plugin *From(lua_State *L);
 	static void *Alloc(void *ud, void *ptr, size_t osize, size_t nsize);
@@ -117,6 +139,8 @@ private:
 	static int ApiHttpRequest(lua_State *L);
 	static int ApiJsonEncode(lua_State *L);
 	static int ApiJsonDecode(lua_State *L);
+	static int ApiInvoke(lua_State *L);
+	static int RunProtected(lua_State *L);
 
 	struct Timer {
 		int ref = 0;
@@ -137,6 +161,22 @@ private:
 		int generation,
 		int callbackRef,
 		lua_State *thread);
+	// Exactly one of reply / error.
+	void finishInvoke(
+		const mtpBuffer *reply,
+		const MTP::Error *error,
+		Tl::Type type,
+		int generation,
+		int callbackRef,
+		lua_State *thread);
+	// Gives the `nresults` values `push` makes to the callback of a
+	// finished async call, or resumes the coroutine waiting for them.
+	void deliver(
+		int callbackRef,
+		lua_State *thread,
+		int nresults,
+		Fn<void(lua_State*)> push);
+	void forgetThread(lua_State *thread);
 
 	void openLibraries();
 	void registerApi();
@@ -147,6 +187,15 @@ private:
 	// success. On error logs it and returns false.
 	bool call(int nargs, int nresults, crl::time budget);
 	bool callGlobal(const char *name, crl::time budget);
+	// Runs `body` in a protected call with `nargs` values from the stack
+	// as its arguments, leaves `nresults` of what it pushed. On error pops
+	// it and logs it with fail(), or only stores it into `error`.
+	bool protect(
+		int nargs,
+		int nresults,
+		Fn<void(lua_State*)> body,
+		QString *error = nullptr);
+	[[nodiscard]] bool accepts(int ref, mtpTypeId method) const;
 	void fail(const QString &error);
 
 	void pushMessage(not_null<HistoryItem*> item);
@@ -177,6 +226,10 @@ private:
 	std::map<lua_State*, int> _threads;
 	std::unique_ptr<QNetworkAccessManager> _network;
 	std::vector<QPointer<QNetworkReply>> _requests;
+	int _invokes = 0; // tg.invoke calls waiting for an answer
+
+	// Handler reference -> the only methods it wants, all if absent.
+	std::map<int, base::flat_set<mtpTypeId>> _methodFilters;
 
 };
 

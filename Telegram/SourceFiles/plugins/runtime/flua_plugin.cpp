@@ -17,8 +17,12 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
+#include "mtproto/details/mtproto_serialized_request.h"
+#include "mtproto/mtp_instance.h"
+#include "mtproto/mtproto_response.h"
 #include "plugins/plugins_hooks.h"
 #include "plugins/runtime/flua_runtime.h"
+#include "plugins/runtime/flua_tl.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 
@@ -59,6 +63,7 @@ constexpr auto kMaxRequestBody = 1024 * 1024;
 constexpr auto kMaxResponseBody = qint64(4 * 1024 * 1024);
 constexpr auto kRequestTimeout = 20000;
 constexpr auto kMaxJsonDepth = 64;
+constexpr auto kMaxInvokes = 32;
 
 void PushString(lua_State *L, const QString &value) {
 	const auto utf8 = value.toUtf8();
@@ -197,6 +202,9 @@ void PushJson(lua_State *L, const QJsonValue &value, int depth) {
 	case Event::Display: return "display";
 	case Event::Screen: return "screen";
 	case Event::ProfileRows: return "profile.rows";
+	case Event::MtprotoRequest: return "mtproto.request";
+	case Event::MtprotoResponse: return "mtproto.response";
+	case Event::MtprotoUpdates: return "mtproto.updates";
 	case Event::Count: break;
 	}
 	return "";
@@ -239,6 +247,32 @@ void PushJson(lua_State *L, const QJsonValue &value, int depth) {
 	case Plugins::Screen::Profile: return "profile";
 	}
 	return "";
+}
+
+// { code, type, description } of a failed tg.invoke.
+void PushError(
+		lua_State *L,
+		int code,
+		const QString &type,
+		const QString &description) {
+	lua_createtable(L, 0, 3);
+	lua_pushinteger(L, code);
+	lua_setfield(L, -2, "code");
+	PushString(L, type);
+	lua_setfield(L, -2, "type");
+	PushString(L, description);
+	lua_setfield(L, -2, "description");
+}
+
+struct DecodeJob {
+	Tl::Type type;
+	const mtpBuffer *data = nullptr;
+};
+
+int RunDecode(lua_State *L) {
+	const auto job = static_cast<const DecodeJob*>(lua_touserdata(L, 1));
+	Tl::Push(L, job->type, *job->data);
+	return 1;
 }
 
 } // namespace
@@ -370,11 +404,13 @@ void Plugin::stop() {
 	}
 	_timers.clear();
 	_threads.clear();
+	_invokes = 0;
 	lua_close(_lua);
 	_lua = nullptr;
 	for (auto &list : _handlers) {
 		list.clear();
 	}
+	_methodFilters.clear();
 	_menu.clear();
 	_host->refreshHooks();
 }
@@ -491,6 +527,7 @@ void Plugin::registerApi() {
 	set("encode", &Plugin::ApiJsonEncode);
 	set("decode", &Plugin::ApiJsonDecode);
 	lua_setfield(_lua, -2, "json");
+	set("invoke", &Plugin::ApiInvoke);
 	lua_setglobal(_lua, "tg");
 }
 
@@ -548,6 +585,37 @@ bool Plugin::callGlobal(const char *name, crl::time budget) {
 		return true;
 	}
 	return call(0, 0, budget);
+}
+
+int Plugin::RunProtected(lua_State *L) {
+	const auto body = static_cast<Fn<void(lua_State*)>*>(
+		lua_touserdata(L, 1));
+	lua_remove(L, 1);
+	(*body)(L);
+	return lua_gettop(L);
+}
+
+bool Plugin::protect(
+		int nargs,
+		int nresults,
+		Fn<void(lua_State*)> body,
+		QString *error) {
+	const auto base = lua_gettop(_lua) - nargs + 1;
+	lua_pushcfunction(_lua, &Plugin::RunProtected);
+	lua_insert(_lua, base);
+	lua_pushlightuserdata(_lua, &body);
+	lua_insert(_lua, base + 1);
+	if (lua_pcall(_lua, nargs + 1, nresults, 0) == LUA_OK) {
+		return true;
+	}
+	const auto message = ToString(_lua, -1);
+	lua_pop(_lua, 1);
+	if (error) {
+		*error = message;
+	} else {
+		fail(message);
+	}
+	return false;
 }
 
 void Plugin::fail(const QString &error) {
@@ -833,6 +901,201 @@ void Plugin::profileRows(
 	}
 }
 
+bool Plugin::accepts(int ref, mtpTypeId method) const {
+	const auto i = _methodFilters.find(ref);
+	return (i == end(_methodFilters)) || i->second.contains(method);
+}
+
+bool Plugin::wants(Event event, mtpTypeId method) const {
+	if (!_lua) {
+		return false;
+	}
+	for (const auto ref : _handlers[size_t(event)]) {
+		if (accepts(ref, method)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+RawResult Plugin::mtprotoRequest(const mtpBuffer &body, mtpTypeId method) {
+	const auto handlers = _handlers[size_t(Event::MtprotoRequest)];
+	auto decoded = false;
+	auto changed = false;
+	for (const auto ref : handlers) {
+		if (!_lua) {
+			return {};
+		} else if (!accepts(ref, method)) {
+			continue;
+		}
+		if (!decoded) {
+			// Decoded once, the table stays on top between the handlers.
+			auto error = QString();
+			const auto push = [&](lua_State *L) {
+				Tl::Push(L, Tl::Query(), body);
+			};
+			if (!protect(0, 1, push, &error)) {
+				DEBUG_LOG(("Plugins: could not decode a request: %1"
+					).arg(error));
+				return {};
+			}
+			decoded = true;
+		}
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+		lua_pushvalue(_lua, -2);
+		if (!call(1, 1, kFilterBudget)) {
+			continue;
+		}
+		if (lua_isboolean(_lua, -1) && !lua_toboolean(_lua, -1)) {
+			lua_pop(_lua, 2); // false, the call
+			return { .verdict = Verdict::Cancel };
+		} else if (lua_istable(_lua, -1)) {
+			lua_replace(_lua, -2); // the returned table is the call now
+			changed = true;
+		} else {
+			lua_pop(_lua, 1);
+		}
+	}
+	if (!decoded) {
+		return {};
+	} else if (!changed) {
+		lua_pop(_lua, 1);
+		return {};
+	}
+	auto result = RawResult{ .verdict = Verdict::Modify };
+	const auto read = [&](lua_State *L) {
+		result.body = Tl::Read(L, 1, Tl::Query());
+	};
+	if (!protect(1, 0, read)) {
+		return {}; // a bad table is the plugin's error, the call goes as is
+	}
+	return result;
+}
+
+std::optional<mtpBuffer> Plugin::mtprotoResponse(
+		const mtpBuffer &reply,
+		mtpTypeId method) {
+	const auto error = !reply.isEmpty()
+		&& (mtpTypeId(reply[0]) == Tl::kRpcError);
+	const auto type = error ? Tl::Object() : Tl::ResultOf(method);
+	const auto name = Tl::Name(method);
+	const auto handlers = _handlers[size_t(Event::MtprotoResponse)];
+	auto decoded = false;
+	for (const auto ref : handlers) {
+		if (!_lua) {
+			return std::nullopt;
+		} else if (!accepts(ref, method)) {
+			continue;
+		}
+		if (!decoded) {
+			auto message = QString();
+			const auto push = [&](lua_State *L) {
+				Tl::Push(L, type, reply);
+			};
+			if (!protect(0, 1, push, &message)) {
+				DEBUG_LOG(("Plugins: could not decode a response: %1"
+					).arg(message));
+				return std::nullopt;
+			}
+			decoded = true;
+		}
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+		lua_pushvalue(_lua, -2);
+		if (name.isEmpty()) {
+			lua_pushnil(_lua);
+		} else {
+			lua_pushlstring(_lua, name.constData(), size_t(name.size()));
+		}
+		if (!call(2, 1, kFilterBudget)) {
+			continue;
+		} else if (lua_isnil(_lua, -1)) {
+			lua_pop(_lua, 1);
+			continue;
+		}
+		lua_remove(_lua, -2); // the decoded value, keep the replacement
+		auto result = mtpBuffer();
+		const auto read = [&](lua_State *L) {
+			// An error can be answered with a result and back.
+			auto as = type;
+			if (lua_istable(L, 1)) {
+				lua_pushliteral(L, "_");
+				lua_rawget(L, 1);
+				if (lua_type(L, -1) == LUA_TSTRING
+					&& ToBytes(L, -1) == "rpc_error") {
+					as = Tl::Object();
+				} else if (error) {
+					as = Tl::ResultOf(method);
+				}
+				lua_pop(L, 1);
+			}
+			result = Tl::Read(L, 1, as);
+		};
+		if (!protect(1, 0, read)) {
+			return std::nullopt;
+		}
+		return result;
+	}
+	if (decoded) {
+		lua_pop(_lua, 1);
+	}
+	return std::nullopt;
+}
+
+RawResult Plugin::mtprotoUpdates(const mtpBuffer &updates) {
+	const auto type = Tl::Boxed("Updates");
+	if (!type.valid()) {
+		return {};
+	}
+	const auto handlers = _handlers[size_t(Event::MtprotoUpdates)];
+	auto decoded = false;
+	auto changed = false;
+	for (const auto ref : handlers) {
+		if (!_lua) {
+			return {};
+		}
+		if (!decoded) {
+			auto error = QString();
+			const auto push = [&](lua_State *L) {
+				Tl::Push(L, type, updates);
+			};
+			if (!protect(0, 1, push, &error)) {
+				DEBUG_LOG(("Plugins: could not decode updates: %1"
+					).arg(error));
+				return {};
+			}
+			decoded = true;
+		}
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+		lua_pushvalue(_lua, -2);
+		if (!call(1, 1, kFilterBudget)) {
+			continue;
+		}
+		if (lua_isboolean(_lua, -1) && !lua_toboolean(_lua, -1)) {
+			lua_pop(_lua, 2);
+			return { .verdict = Verdict::Cancel };
+		} else if (lua_istable(_lua, -1)) {
+			lua_replace(_lua, -2);
+			changed = true;
+		} else {
+			lua_pop(_lua, 1);
+		}
+	}
+	if (!decoded) {
+		return {};
+	} else if (!changed) {
+		lua_pop(_lua, 1);
+		return {};
+	}
+	auto result = RawResult{ .verdict = Verdict::Modify };
+	const auto read = [&](lua_State *L) {
+		result.body = Tl::Read(L, 1, type);
+	};
+	if (!protect(1, 0, read)) {
+		return {};
+	}
+	return result;
+}
+
 void Plugin::loadSettings() {
 	auto file = QFile(_dataPath + u"settings.json"_q);
 	if (file.open(QIODevice::ReadOnly)) {
@@ -945,12 +1208,58 @@ int Plugin::ApiOn(lua_State *L) {
 	case Event::ProfileRows:
 		plugin->requirePermission(kPermUi);
 		break;
+	case Event::MtprotoRequest:
+	case Event::MtprotoResponse:
+	case Event::MtprotoUpdates:
+		plugin->requirePermission(kPermMtproto);
+		if (!Tl::Available()) {
+			return luaL_error(L, "the TL schema is not available");
+		}
+		break;
 	case Event::Count:
 		return luaL_error(L, "unknown event: %s", name.toUtf8().constData());
 	}
+
+	// Requests and responses: an optional method name or list of them.
+	auto filter = std::optional<base::flat_set<mtpTypeId>>();
+	if (!lua_isnoneornil(L, 3)) {
+		if (event != Event::MtprotoRequest
+			&& event != Event::MtprotoResponse) {
+			return luaL_error(L, "only mtproto.request and mtproto.response "
+				"take a list of methods");
+		}
+		auto methods = base::flat_set<mtpTypeId>();
+		const auto add = [&](int index) {
+			if (lua_type(L, index) != LUA_TSTRING) {
+				luaL_error(L, "method names must be strings");
+			}
+			const auto method = ToBytes(L, index);
+			const auto id = Tl::Id(method);
+			if (!id || !Tl::IsMethod(id)) {
+				luaL_error(L, "unknown method: %s", method.constData());
+			}
+			methods.emplace(id);
+		};
+		if (lua_type(L, 3) == LUA_TSTRING) {
+			add(3);
+		} else {
+			luaL_checktype(L, 3, LUA_TTABLE);
+			const auto count = lua_Integer(lua_rawlen(L, 3));
+			for (auto i = lua_Integer(1); i <= count; ++i) {
+				lua_rawgeti(L, 3, i);
+				add(-1);
+				lua_pop(L, 1);
+			}
+		}
+		filter = std::move(methods);
+	}
+
 	lua_pushvalue(L, 2);
-	plugin->_handlers[size_t(event)].push_back(
-		luaL_ref(L, LUA_REGISTRYINDEX));
+	const auto ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	plugin->_handlers[size_t(event)].push_back(ref);
+	if (filter) {
+		plugin->_methodFilters.emplace(ref, std::move(*filter));
+	}
 	// Hooks are enabled when the call that registered this returns.
 	crl::on_main(plugin, [host = plugin->_host] {
 		host->refreshHooks();
@@ -1129,9 +1438,44 @@ void Plugin::resume(lua_State *thread, lua_State *from, int nargs) {
 		lua_pop(_lua, 1);
 		fail(error);
 	}
+	forgetThread(thread);
+}
+
+void Plugin::forgetThread(lua_State *thread) {
 	if (const auto i = _threads.find(thread); i != end(_threads)) {
 		luaL_unref(_lua, LUA_REGISTRYINDEX, i->second);
 		_threads.erase(i);
+	}
+}
+
+void Plugin::deliver(
+		int callbackRef,
+		lua_State *thread,
+		int nresults,
+		Fn<void(lua_State*)> push) {
+	// Values are made in the main state under protection and only then
+	// moved: a suspended coroutine can't run a protected call itself.
+	if (callbackRef != LUA_NOREF) {
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, callbackRef);
+		luaL_unref(_lua, LUA_REGISTRYINDEX, callbackRef);
+		if (!protect(0, nresults, std::move(push))) {
+			lua_pop(_lua, 1); // the callback
+			return;
+		}
+		call(nresults, 0, kEventBudget);
+	} else if (thread && _threads.contains(thread)) {
+		if (!protect(0, nresults, std::move(push))) {
+			forgetThread(thread); // it can't go on without its values
+			return;
+		}
+		lua_xmove(_lua, thread, nresults);
+		_deadline = crl::now() + kEventBudget;
+		lua_sethook(
+			thread,
+			&Plugin::CountHook,
+			LUA_MASKCOUNT,
+			kHookInstructions);
+		resume(thread, nullptr, nresults);
 	}
 }
 
@@ -1363,17 +1707,7 @@ void Plugin::finishRequest(
 		}
 	};
 
-	if (callbackRef != LUA_NOREF) {
-		lua_rawgeti(_lua, LUA_REGISTRYINDEX, callbackRef);
-		luaL_unref(_lua, LUA_REGISTRYINDEX, callbackRef);
-		push(_lua);
-		call(1, 0, kEventBudget);
-	} else if (thread && _threads.contains(thread)) {
-		_deadline = crl::now() + kEventBudget;
-		lua_sethook(thread, &Plugin::CountHook, LUA_MASKCOUNT, kHookInstructions);
-		push(thread);
-		resume(thread, nullptr, 1);
-	}
+	deliver(callbackRef, thread, 1, push);
 }
 
 int Plugin::ApiJsonEncode(lua_State *L) {
@@ -1406,6 +1740,119 @@ int Plugin::ApiJsonDecode(lua_State *L) {
 			: QJsonValue(document.object()),
 		0);
 	return 1;
+}
+
+// Raw MTProto calls.
+
+int Plugin::ApiInvoke(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermMtproto);
+	luaL_checktype(L, 1, LUA_TTABLE);
+	const auto callback = lua_isfunction(L, 2);
+	if (!callback && !plugin->_threads.contains(L)) {
+		return luaL_error(
+			L,
+			"tg.invoke needs a callback or a tg.async(...) coroutine");
+	} else if (plugin->_invokes >= kMaxInvokes) {
+		return luaL_error(L, "too many calls at once");
+	}
+	const auto session = ActiveSession();
+	if (!session) {
+		return luaL_error(L, "no account is logged in");
+	}
+	auto body = Tl::Read(L, 1, Tl::Query()); // raises on a bad table
+	const auto method = Tl::MethodOf(body);
+	const auto type = Tl::ResultOf(method);
+
+	auto callbackRef = LUA_NOREF;
+	if (callback) {
+		lua_pushvalue(L, 2);
+		callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
+	}
+	const auto thread = callback ? nullptr : L;
+	const auto generation = plugin->_generation;
+	const auto weak = base::make_weak(plugin);
+	const auto host = base::make_weak(plugin->_host.get());
+	const auto requestId = MTP::details::GetNextRequestId();
+	++plugin->_invokes;
+	// Filters of plugins never see the calls of plugins: no loops.
+	plugin->_host->ownRequest(requestId, method);
+	const auto finish = [=](
+			const mtpBuffer *reply,
+			const MTP::Error *error) {
+		if (const auto strong = host.get()) {
+			strong->forgetOwnRequest(requestId);
+		}
+		if (const auto strong = weak.get()) {
+			strong->finishInvoke(
+				reply,
+				error,
+				type,
+				generation,
+				callbackRef,
+				thread);
+		}
+	};
+	// Sent on the next event loop turn, not from inside a running hook.
+	crl::on_main(session, [=, body = std::move(body)] {
+		auto request = MTP::details::SerializedRequest::Prepare(
+			uint32(body.size()));
+		request->append(body);
+		session->mtp().sendSerialized(
+			requestId,
+			std::move(request),
+			MTP::ResponseHandler{
+				.done = [=](const MTP::Response &response) {
+					finish(&response.reply, nullptr);
+					return true;
+				},
+				.fail = [=](
+						const MTP::Error &error,
+						const MTP::Response &) {
+					finish(nullptr, &error);
+					return true;
+				},
+			},
+			0,  // main dc
+			0,  // send now
+			0); // after no request
+	});
+	if (callback) {
+		return 0;
+	}
+	return lua_yield(L, 0); // resumed with (result, error) by finishInvoke()
+}
+
+void Plugin::finishInvoke(
+		const mtpBuffer *reply,
+		const MTP::Error *error,
+		Tl::Type type,
+		int generation,
+		int callbackRef,
+		lua_State *thread) {
+	if (generation != _generation || !_lua) {
+		return;
+	}
+	--_invokes;
+	// (result, nil) or (nil, { code, type, description })
+	deliver(callbackRef, thread, 2, [&](lua_State *L) {
+		if (reply) {
+			auto job = DecodeJob{ .type = type, .data = reply };
+			lua_pushcfunction(L, &RunDecode);
+			lua_pushlightuserdata(L, &job);
+			if (lua_pcall(L, 1, 1, 0) == LUA_OK) {
+				lua_pushnil(L);
+				return;
+			}
+			const auto message = ToString(L, -1);
+			lua_pop(L, 1);
+			lua_pushnil(L);
+			PushError(L, 0, u"TL_DECODE_FAILED"_q, message);
+		} else {
+			lua_pushnil(L);
+			PushError(L, error->code(), error->type(), error->description());
+		}
+	});
 }
 
 } // namespace Plugins::Flua

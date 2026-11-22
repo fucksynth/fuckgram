@@ -21,6 +21,8 @@ inline constexpr auto kPermActions = "actions";
 inline constexpr auto kPermDisplay = "display";
 inline constexpr auto kPermChatsRead = "chats.read";
 inline constexpr auto kPermCompose = "compose";
+// Raw MTProto: tg.invoke and the mtproto.* filters. Full account access.
+inline constexpr auto kPermMtproto = "mtproto";
 
 [[nodiscard]] const std::vector<QString> &KnownPermissions();
 

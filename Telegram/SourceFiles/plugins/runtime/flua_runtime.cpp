@@ -16,6 +16,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "logs.h"
 #include "plugins/runtime/flua_package.h"
 #include "plugins/runtime/flua_plugin.h"
+#include "plugins/runtime/flua_tl.h"
 #include "settings.h"
 #include "ui/layers/generic_box.h"
 #include "ui/widgets/checkbox.h"
@@ -111,6 +112,12 @@ void Toast(const QString &text) {
 		return pick(
 			"read and replace the text you type",
 			"читать и заменять набираемый текст");
+	} else if (is(kPermMtproto)) {
+		return pick(
+			"⚠ FULL ACCESS TO YOUR ACCOUNT: send any request to Telegram, "
+			"read and change everything the client sends and receives",
+			"⚠ ПОЛНЫЙ ДОСТУП К АККАУНТУ: любые запросы к Telegram, "
+			"чтение и подмена всего, что клиент отправляет и получает");
 	}
 	return permission;
 }
@@ -285,6 +292,15 @@ void Host::refreshHooks() {
 	SetEnabled(Hook::MessageMenu, menu(MenuPlace::Message, MenuPlace::Message));
 	SetEnabled(Hook::MainMenu, menu(MenuPlace::Main, MenuPlace::Main));
 	SetEnabled(Hook::PeerMenu, menu(MenuPlace::Chat, MenuPlace::Profile));
+	const auto requests = has(Event::MtprotoRequest);
+	const auto responses = has(Event::MtprotoResponse);
+	// Responses are decoded by the method of their request: watch those.
+	SetEnabled(Hook::Request, requests || responses);
+	SetEnabled(Hook::Response, responses);
+	SetEnabled(Hook::Updates, has(Event::MtprotoUpdates));
+	if (!responses) {
+		_methods.clear();
+	}
 	// Always on: opening a .flua file offers to install it.
 	SetEnabled(Hook::ClientEvent, true);
 }
@@ -380,6 +396,95 @@ std::optional<QString> Host::displayText(
 		}
 	}
 	return result;
+}
+
+void Host::ownRequest(mtpRequestId requestId, mtpTypeId method) {
+	_own.emplace(requestId, method);
+}
+
+void Host::forgetOwnRequest(mtpRequestId requestId) {
+	_own.erase(requestId);
+}
+
+RawResult Host::request(const RawRequest &request) {
+	if (_own.contains(request.requestId)) {
+		return {};
+	}
+	auto method = Tl::MethodOf(request.body);
+	auto body = std::optional<mtpBuffer>();
+	for (const auto &plugin : _plugins) {
+		if (!plugin->wants(Event::MtprotoRequest, method)) {
+			continue;
+		}
+		auto result = plugin->mtprotoRequest(
+			body ? *body : request.body,
+			method);
+		if (result.verdict == Verdict::Cancel) {
+			return result;
+		} else if (result.verdict == Verdict::Modify) {
+			body = std::move(result.body);
+			method = Tl::MethodOf(*body);
+		}
+	}
+	if (Has(Hook::Response)) {
+		_methods[request.requestId] = method;
+		// Requests that never get an answer must not pile up.
+		while (_methods.size() > kMaxWatched) {
+			_methods.erase(_methods.begin()); // the oldest id
+		}
+	}
+	return body
+		? RawResult{ .verdict = Verdict::Modify, .body = std::move(*body) }
+		: RawResult();
+}
+
+std::optional<mtpBuffer> Host::response(
+		not_null<MTP::Instance*> instance,
+		mtpRequestId requestId,
+		const mtpBuffer &reply) {
+	if (_own.contains(requestId)) {
+		return std::nullopt;
+	}
+	auto method = mtpTypeId(0);
+	if (const auto i = _methods.find(requestId); i != end(_methods)) {
+		method = i->second;
+		// After an error the same request may be sent again.
+		if (reply.isEmpty() || mtpTypeId(reply[0]) != Tl::kRpcError) {
+			_methods.erase(i);
+		}
+	}
+	auto result = std::optional<mtpBuffer>();
+	for (const auto &plugin : _plugins) {
+		if (!plugin->wants(Event::MtprotoResponse, method)) {
+			continue;
+		}
+		if (auto replaced = plugin->mtprotoResponse(
+				result ? *result : reply,
+				method)) {
+			result = std::move(replaced);
+		}
+	}
+	return result;
+}
+
+RawResult Host::updates(
+		not_null<MTP::Instance*> instance,
+		const mtpBuffer &updates) {
+	auto body = std::optional<mtpBuffer>();
+	for (const auto &plugin : _plugins) {
+		if (!plugin->handles(Event::MtprotoUpdates)) {
+			continue;
+		}
+		auto result = plugin->mtprotoUpdates(body ? *body : updates);
+		if (result.verdict == Verdict::Cancel) {
+			return result;
+		} else if (result.verdict == Verdict::Modify) {
+			body = std::move(result.body);
+		}
+	}
+	return body
+		? RawResult{ .verdict = Verdict::Modify, .body = std::move(*body) }
+		: RawResult();
 }
 
 void Host::profileRows(

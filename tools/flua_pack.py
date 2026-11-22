@@ -17,7 +17,7 @@ import zipfile
 
 KNOWN_PERMISSIONS = {
     "messages.read", "messages.send", "ui", "storage", "links",
-    "actions", "display", "chats.read", "compose",
+    "actions", "display", "chats.read", "compose", "mtproto",
 }
 NET_HOST = r"^(\*\.)?[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)+$"
 NATIVE = (".dll", ".so", ".dylib", ".exe", ".pyd")
