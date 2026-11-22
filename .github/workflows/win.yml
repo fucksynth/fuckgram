@@ -4,6 +4,8 @@ name: Windows
 # (AyuGram's prepare.py is identical to that version).
 # Only x64, one generator; libraries are cached and partial progress
 # is saved even when the job times out, so the first long build resumes.
+# Runs on push (code changes only) and manually (Actions → Windows → Run
+# workflow; needs this file on the default branch).
 
 on:
   push:
