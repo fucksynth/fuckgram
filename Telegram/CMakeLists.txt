@@ -33,6 +33,7 @@ include(cmake/lib_ffmpeg.cmake)
 include(cmake/lib_stripe.cmake)
 include(cmake/lib_tgcalls.cmake)
 include(cmake/lib_prisma.cmake)
+include(cmake/lib_lua.cmake)
 include(cmake/lib_fido2.cmake)
 include(cmake/td_export.cmake)
 include(cmake/td_iv.cmake)
@@ -68,6 +69,7 @@ set_target_properties(Telegram PROPERTIES AUTOMOC ON)
 
 target_link_libraries(Telegram
 PRIVATE
+    fuckgram::lib_lua
     tdesktop::lib_fido2
     tdesktop::lib_tgcalls
     tdesktop::td_export
@@ -1841,6 +1843,12 @@ PRIVATE
     payments/payments_reaction_process.h
     plugins/plugins_hooks.cpp
     plugins/plugins_hooks.h
+    plugins/runtime/flua_package.cpp
+    plugins/runtime/flua_package.h
+    plugins/runtime/flua_plugin.cpp
+    plugins/runtime/flua_plugin.h
+    plugins/runtime/flua_runtime.cpp
+    plugins/runtime/flua_runtime.h
     platform/linux/file_utilities_linux.cpp
     platform/linux/file_utilities_linux.h
     platform/linux/launcher_linux.cpp

@@ -1,0 +1,48 @@
+/*
+This file is part of fuckgram, a Telegram Desktop client based on AyuGram.
+
+For license and copyright information please follow this link:
+https://github.com/fucksynth/fuckgram/blob/main/LICENSE
+*/
+#pragma once
+
+namespace Plugins::Flua {
+
+inline constexpr auto kApiVersion = 1;
+
+// Permissions a plugin can request in manifest.json. Unknown names make
+// the package invalid, so a typo never silently drops a permission.
+inline constexpr auto kPermMessagesRead = "messages.read";
+inline constexpr auto kPermMessagesSend = "messages.send";
+inline constexpr auto kPermUi = "ui";
+inline constexpr auto kPermStorage = "storage";
+
+[[nodiscard]] const std::vector<QString> &KnownPermissions();
+
+struct Manifest {
+	QString id;
+	QString name;
+	QString version;
+	QString author;
+	QString description;
+	QString entry;
+	int apiMin = 0;
+	int apiMax = 0;
+	std::vector<QString> permissions;
+
+	[[nodiscard]] bool has(const char *permission) const;
+};
+
+// The whole package in memory: a .flua archive (zip) or an unpacked
+// development folder. Paths are relative, with '/' separators.
+struct Package {
+	QString origin; // file or folder it was read from
+	std::map<QString, QByteArray> files;
+	Manifest manifest;
+	QString error; // non-empty if the package is not usable
+};
+
+[[nodiscard]] Package ReadPackageFile(const QString &path);
+[[nodiscard]] Package ReadPackageFolder(const QString &path);
+
+} // namespace Plugins::Flua

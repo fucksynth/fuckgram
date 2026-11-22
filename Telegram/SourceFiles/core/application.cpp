@@ -113,6 +113,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_settings.h"
 #include "ayu/features/streamer_mode/streamer_mode.h"
 #include "plugins/plugins_hooks.h"
+#include "plugins/runtime/flua_runtime.h"
 
 
 namespace Core {
@@ -265,7 +266,7 @@ void Application::closeAdditionalWindows() {
 Application::~Application() {
 	// PLUGIN-HOOK: app_stop
 	Plugins::NotifyAppState(Plugins::AppState::Stopping);
-	Plugins::SetSink(nullptr);
+	Plugins::Flua::Stop();
 
 	if (_savedWindows) {
 		_savedWindows->writeNow();
@@ -489,6 +490,7 @@ void Application::run() {
 	_savedWindows->startRestore();
 
 	// PLUGIN-HOOK: app_state
+	Plugins::Flua::Start();
 	Plugins::NotifyAppState(Plugins::AppState::Started);
 	appDeactivatedValue(
 	) | rpl::on_next([](bool deactivated) {

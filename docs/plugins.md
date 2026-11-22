@@ -1,7 +1,51 @@
 # Plugins
 
-Status: **in development.** The hook layer is in the client; the Lua runtime
-that runs `.flua` plugins is not connected yet, so all hooks are idle.
+Status: **in development.** The Lua runtime (API version 1) is in the
+client: it loads plugins, runs them in a sandbox and connects a first set of
+events and functions to the hooks. Static permission analysis on import,
+async calls and the `.flua` catalog are not done yet.
+
+## Writing a plugin (API 1)
+
+A plugin is a folder or a `.flua` archive (zip) with `manifest.json` at its
+root. Put it into `plugins/` next to `tdata` (portable) or in the fuckgram data
+folder, then restart. Settings → Plugins lists what is loaded and the last
+error of each plugin. A full example: [`examples/plugins/hello`](../examples/plugins/hello).
+
+```json
+{
+    "id": "example.hello",
+    "name": "Hello",
+    "version": "1.0",
+    "api": { "min": 1, "max": 1 },
+    "entry": "init.lua",
+    "permissions": ["messages.send", "ui", "storage"]
+}
+```
+
+| Lua | Permission | What it does |
+|---|---|---|
+| `plugin.on("message.new", fn(msg))` | `messages.read` | new incoming message |
+| `plugin.on("message.send", fn(draft))` | `messages.send` | outgoing text: return `false` to cancel, a string to replace, `nil` to keep |
+| `plugin.on("app.state", fn(state))` | — | `started`, `active`, `inactive`, `stopping` |
+| `plugin.menu(place, text, fn(ctx))` | `ui` | menu item; `place` is `message`, `main`, `chat` or `profile`; `ctx.peer`, `ctx.message` |
+| `plugin.settings.get(key, default)`, `.set(key, value)` | `storage` | small values kept between runs |
+| `tg.toast(text)` | `ui` | short notice in the window |
+| `tg.messages.send(peer, text)` | `messages.send` | send a text message |
+| `tg.log(...)`, `print(...)` | — | write to the client log |
+| `require("source.module")` | — | load `source/module.lua` or `lib/module.lua` from the package |
+| global `on_enable()`, `on_disable()` | — | called after the entry file ran and before the plugin stops |
+
+`msg` is `{ id, peer, from, text, out, date }`. Chat ids are written as in the
+Bot API: users `> 0`, basic groups `< 0`, channels and supergroups
+`-100…`.
+
+The sandbox has `string` (no `dump`), `table`, `math`, `utf8`, `coroutine` and
+`os.time` / `os.clock` / `os.date` / `os.difftime`. There is no `io`, no
+`load` / `loadfile` / `dofile`, no `debug`, no `rawget` / `rawset`, and only
+text Lua is accepted, never bytecode. A call that runs too long is stopped
+(50 ms for the send filter, 200 ms for events, 1 s for menu clicks, 2 s at
+start), a plugin is limited to 64 MB, and after 5 errors it is stopped.
 
 ## Design
 
