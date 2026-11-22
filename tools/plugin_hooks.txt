@@ -24,3 +24,6 @@ display_message_text        # HistoryView::Element::setTextWithLinks
 display_chat_list_name      # Dialogs::Entry::chatListNameText
 display_chat_title          # HistoryView::TopBarWidget::paintTopBar
 display_chat_subtitle       # HistoryView::TopBarWidget::updateOnlineDisplay
+main_menu                   # Window::MainMenu::setupMenu (after Settings)
+compose_field_history       # HistoryWidget constructor: register the input field
+compose_field_section       # HistoryView::ComposeControls::initField

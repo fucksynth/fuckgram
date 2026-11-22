@@ -524,6 +524,11 @@ HistoryWidget::HistoryWidget(
 	) | rpl::filter(rpl::mappers::_1) | rpl::on_next([=] {
 		fieldFocused();
 	}, _field->lifetime());
+	// PLUGIN-HOOK: compose_field_history
+	Plugins::RegisterComposeField(
+		_field.data(),
+		[=] { return _field->getTextWithTags(); },
+		[=](const TextWithTags &text) { _field->setTextWithTags(text); });
 	_field->changes(
 	) | rpl::on_next([=] {
 		fieldChanged();

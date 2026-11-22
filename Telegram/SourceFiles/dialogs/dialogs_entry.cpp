@@ -330,7 +330,10 @@ void Entry::notifyUnreadStateChange(const UnreadState &wasState) {
 }
 
 const Ui::Text::String &Entry::chatListNameText() const {
-	const auto version = chatListNameVersion();
+	// Plugins::DisplayGeneration() rebuilds the name after a plugin
+	// changed its display rules (see display_chat_list_name below).
+	const auto version = chatListNameVersion()
+		+ Plugins::DisplayGeneration();
 	if (_chatListNameVersion < version) {
 		_chatListNameVersion = version;
 		auto name = chatListName();

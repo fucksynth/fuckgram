@@ -87,6 +87,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "styles/style_ayu_icons.h"
 #include "lang_auto.h"
 #include "ayu/ui/settings/settings_main.h"
+#include "plugins/plugins_hooks.h"
 #include "styles/style_info.h"
 
 
@@ -845,6 +846,13 @@ void MainMenu::setupMenu() {
 	)->setClickedCallback([=] {
 		controller->showSettings();
 	});
+	// PLUGIN-HOOK: main_menu
+	for (auto &item : Plugins::MainMenuItems()) {
+		addAction(
+			rpl::single(std::move(item.text)),
+			{ &st::menuIconBotCommands }
+		)->setClickedCallback(std::move(item.handler));
+	}
 
 	if (settings.showNightModeToggleInDrawer()) {
 

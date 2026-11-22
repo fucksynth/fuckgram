@@ -67,7 +67,13 @@ Everything between the client and the runtime goes through
 | Actions | `client_event_*` | cancel reply, reaction, outgoing call, transcription, notification |
 | Menus | `peer_menu_*` | items in the chat and profile menus |
 | | `message_menu_*` | items in the message context menu |
+| | `main_menu` | items in the main (drawer) menu |
+| Input | `compose_field_*` | read and replace the text being typed |
 | Display | `display_*` | replace shown text: message, chat list name, chat title and status |
+
+After a plugin changes its display rules the runtime calls
+`Plugins::RefreshDisplayText()`: messages of loaded chats are re-laid out
+at once, chat names and headers on their next repaint.
 
 ## Adding a hook
 

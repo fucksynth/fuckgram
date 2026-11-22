@@ -688,8 +688,10 @@ void TopBarWidget::paintTopBar(Painter &p) {
 			paintStatus(p, statusleft, statustop, statuswidth, width());
 		}
 	} else if (namePeer) {
-		if (_titleNameVersion < namePeer->nameVersion()) {
-			_titleNameVersion = namePeer->nameVersion();
+		const auto titleVersion = namePeer->nameVersion()
+			+ Plugins::DisplayGeneration();
+		if (_titleNameVersion < titleVersion) {
+			_titleNameVersion = titleVersion;
 			auto titleText = TopBarNameText(namePeer, _activeChat);
 			// PLUGIN-HOOK: display_chat_title
 			if (auto replaced = Plugins::DisplayText(

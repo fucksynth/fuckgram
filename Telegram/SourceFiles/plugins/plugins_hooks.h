@@ -15,6 +15,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 class History;
 class HistoryItem;
 class PeerData;
+class QWidget;
 
 namespace Ui {
 class PopupMenu;
@@ -45,6 +46,7 @@ enum class Hook : uint32 {
 	ClientEvent,  // filter: cancel a user action (reply, reaction, call...)
 	MessageMenu,  // ui: items in the message context menu
 	DisplayText,  // filter: replace shown text (message, chat name...)
+	MainMenu,     // ui: items in the main (drawer) menu
 
 	Count,
 };
@@ -165,6 +167,8 @@ public:
 			const QString &) {
 		return std::nullopt;
 	}
+	virtual void mainMenu(std::vector<MenuItem> &) {
+	}
 };
 
 // The runtime attaches itself and says which hooks it needs.
@@ -220,5 +224,26 @@ void FillMessageMenu(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
 	PeerData *peer,
 	HistoryItem *item,
 	const QString &text);
+
+// Bumped by RefreshDisplayText(); places that cache a hooked text add it
+// to their own version so the cache is rebuilt.
+[[nodiscard]] int DisplayGeneration();
+
+// For the runtime: its display rules changed, rebuild what is shown.
+// Messages of loaded chats are re-laid out now, chat names and headers
+// on their next repaint.
+void RefreshDisplayText();
+
+// Items for the main (drawer) menu.
+[[nodiscard]] std::vector<MenuItem> MainMenuItems();
+
+// Message input fields register themselves; the runtime reads and
+// replaces the text of the current one (focused, else visible).
+void RegisterComposeField(
+	not_null<QWidget*> widget,
+	Fn<TextWithTags()> get,
+	Fn<void(const TextWithTags&)> set);
+[[nodiscard]] std::optional<TextWithTags> ComposeText();
+bool SetComposeText(const TextWithTags &text);
 
 } // namespace Plugins

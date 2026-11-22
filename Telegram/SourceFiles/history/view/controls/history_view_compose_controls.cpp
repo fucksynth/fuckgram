@@ -143,6 +143,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "data/data_ai_compose_tones.h"
 #include "ayu/ayu_settings.h"
+#include "plugins/plugins_hooks.h"
 #include "history/history_item_components.h"
 
 
@@ -3142,6 +3143,11 @@ void ComposeControls::initKeyHandler() {
 
 void ComposeControls::initField() {
 	_field->setMaxHeight(st::historyComposeFieldMaxHeight);
+	// PLUGIN-HOOK: compose_field_section
+	Plugins::RegisterComposeField(
+		_field,
+		[=] { return _field->getTextWithTags(); },
+		[=](const TextWithTags &text) { _field->setTextWithTags(text); });
 	updateSubmitSettings();
 	_field->submits(
 	) | rpl::on_next([=](Qt::KeyboardModifiers modifiers) {

@@ -6,13 +6,24 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 */
 #include "plugins/plugins_hooks.h"
 
+#include "core/application.h"
+#include "data/data_session.h"
+#include "history/history.h"
+#include "history/view/history_view_element.h"
 #include "lang/lang_keys.h"
 #include "logs.h"
+#include "main/main_account.h"
+#include "main/main_domain.h"
+#include "main/main_session.h"
 #include "ui/widgets/menu/menu_add_action_callback.h"
 #include "ui/widgets/popup_menu.h"
 #include "styles/style_menu_icons.h"
 
 #include <crl/crl.h>
+
+#include <QtCore/QPointer>
+#include <QtWidgets/QApplication>
+#include <QtWidgets/QWidget>
 
 namespace Plugins {
 namespace details {
@@ -27,6 +38,40 @@ constexpr auto kSlowCall = crl::time(50);
 Sink *CurrentSink = nullptr;
 uint64 InFlightMask = 0;
 int BypassDepth = 0;
+int DisplayGenerationValue = 0;
+
+struct ComposeEntry {
+	QPointer<QWidget> widget;
+	Fn<TextWithTags()> get;
+	Fn<void(const TextWithTags&)> set;
+};
+
+[[nodiscard]] std::vector<ComposeEntry> &ComposeFields() {
+	static auto result = std::vector<ComposeEntry>();
+	std::erase_if(result, [](const ComposeEntry &entry) {
+		return !entry.widget;
+	});
+	return result;
+}
+
+// The focused field, else the most recently registered visible one.
+[[nodiscard]] ComposeEntry *CurrentCompose() {
+	auto &list = ComposeFields();
+	const auto focus = QApplication::focusWidget();
+	if (focus) {
+		for (auto &entry : list) {
+			if (entry.widget == focus || entry.widget->isAncestorOf(focus)) {
+				return &entry;
+			}
+		}
+	}
+	for (auto i = list.rbegin(); i != list.rend(); ++i) {
+		if (i->widget->isVisible()) {
+			return &*i;
+		}
+	}
+	return nullptr;
+}
 
 [[nodiscard]] uint64 Bit(Hook hook) {
 	return uint64(1) << uint32(hook);
@@ -44,6 +89,7 @@ int BypassDepth = 0;
 	case Hook::ClientEvent: return "client_event";
 	case Hook::MessageMenu: return "message_menu";
 	case Hook::DisplayText: return "display_text";
+	case Hook::MainMenu: return "main_menu";
 	case Hook::Count: break;
 	}
 	return "unknown";
@@ -244,6 +290,75 @@ std::optional<QString> DisplayText(
 		return std::nullopt;
 	}
 	return result;
+}
+
+int DisplayGeneration() {
+	return DisplayGenerationValue;
+}
+
+void RefreshDisplayText() {
+	++DisplayGenerationValue;
+	for (const auto &entry : Core::App().domain().accounts()) {
+		if (!entry.account->sessionExists()) {
+			continue;
+		}
+		auto &data = entry.account->session().data();
+		const auto refresh = [&](not_null<PeerData*> peer) {
+			const auto history = data.historyLoaded(peer->id);
+			if (!history) {
+				return;
+			}
+			for (const auto &block : history->blocks) {
+				for (const auto &view : block->messages) {
+					data.requestItemTextRefresh(view->data());
+				}
+			}
+		};
+		data.enumerateUsers(refresh);
+		data.enumerateGroups(refresh);
+		data.enumerateBroadcasts(refresh);
+	}
+}
+
+std::vector<MenuItem> MainMenuItems() {
+	if (!Ready(Hook::MainMenu)) {
+		return {};
+	}
+	auto items = std::vector<MenuItem>();
+	{
+		const auto guard = InFlight(Hook::MainMenu);
+		CurrentSink->mainMenu(items);
+	}
+	std::erase_if(items, [](const MenuItem &item) {
+		return item.text.isEmpty() || !item.handler;
+	});
+	return items;
+}
+
+void RegisterComposeField(
+		not_null<QWidget*> widget,
+		Fn<TextWithTags()> get,
+		Fn<void(const TextWithTags&)> set) {
+	ComposeFields().push_back({
+		.widget = widget.get(),
+		.get = std::move(get),
+		.set = std::move(set),
+	});
+}
+
+std::optional<TextWithTags> ComposeText() {
+	if (const auto entry = CurrentCompose()) {
+		return entry->get();
+	}
+	return std::nullopt;
+}
+
+bool SetComposeText(const TextWithTags &text) {
+	if (const auto entry = CurrentCompose()) {
+		entry->set(text);
+		return true;
+	}
+	return false;
 }
 
 } // namespace Plugins
