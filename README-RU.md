@@ -1,154 +1,73 @@
-# AyuGram
+# fuckgram
 
-![AyuGram Лого](.github/AyuGram.png) ![AyuChan](.github/AyuChan.png)
+<img src="Telegram/Resources/art/icon256.png" width="96" align="right" alt="Иконка fuckgram">
 
-[ [English](README.md)  | Русский ]
+[ [English](README.md) | Русский ]
 
-## Функции и Фишки
+Клиент Telegram для компьютера с ядром плагинов на Lua. Сделан на основе
+[AyuGram Desktop](https://github.com/AyuGram/AyuGramDesktop), который, в свою
+очередь, основан на [Telegram Desktop](https://github.com/telegramdesktop/tdesktop).
 
-- Полный режим призрака (настраиваемый)
-- История удалений и изменений сообщений
-- Кастомизация шрифта
-- Режим Стримера
-- Локальный телеграм премиум
+[![Windows](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml/badge.svg?branch=dev)](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
+
+> **Ранняя разработка.** Релизов пока нет. Тестовые сборки под Windows
+> собирает GitHub Actions на каждый push в `dev`.
+
+## Возможности
+
+Всё, что есть в AyuGram Desktop:
+
+- Режим призрака (гибкий)
+- История сообщений и защита от удаления
+- Режим стримера
 - Переводчик
-- Превью медиа и быстрая реакция при сильном нажатии на тачпад (macOS)
-- Улучшенный вид
+- Настройка шрифтов и оформления
+- Локальные функции Telegram Premium
 
-И многое другое. Посмотрите нашу [Документацию](https://docs.ayugram.one/desktop/) для более подробной информации.
+И в работе:
 
-<h3>
-  <details>
-    <summary>Превью</summary>
-    <table>
-      <tr>
-        <td><img src='.github/demos/demo1.png' width='268' alt='Preferences'></td>
-        <td><img src='.github/demos/demo2.png' width='268' alt='AyuGram Options'></td>
-        <td><img src='.github/demos/demo3.png' width='268' alt='Message Filters'></td>
-      </tr>
-      <tr>
-        <td><img src='.github/demos/demo4.png' width='268' alt='Appearance'></td>
-        <td><img src='.github/demos/demo5.png' width='268' alt='Chats'></td>
-      </tr>
-    </table>
-  </details>
-</h3>
+- **Плагины на Lua 5.4.** Каждый плагин работает в своей виртуальной машине
+  Lua с лимитами памяти и времени, без доступа к файлам, процессам и
+  нативному коду.
+- **Права проверяются до установки.** Плагин объявляет в манифесте, что ему
+  нужно; код анализируется при импорте, и плагин, который использует больше
+  объявленного, не устанавливается.
+- **Пакеты `.flua`**: манифест, код и ресурсы в одном подписанном файле.
+- **Небольшая и стабильная поверхность хуков.** Клиент общается с плагинами
+  только через `Telegram/SourceFiles/plugins/plugins_hooks.h`, поэтому
+  переход на новую версию AyuGram / Telegram Desktop обходится дёшево.
 
-## Установка
+Устройство и список хуков: [docs/plugins.md](docs/plugins.md).
 
-### Windows
+## Скачать
 
-#### Официальная версия
+Релизов пока нет. Тестовая сборка лежит в последнем успешном
+[запуске Windows](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml),
+в разделе Artifacts.
 
-Вы можете скачать готовый бинарный файл со вкладки [Releases](https://github.com/AyuGram/AyuGramDesktop/releases) или из
-[Телеграм канала](https://t.me/AyuGramReleases).
+## Сборка
 
-#### Winget
+- [Windows](docs/building-win.md)
+- [Linux](docs/building-linux.md)
+- [macOS](docs/building-mac.md)
 
-```bash
-winget install RadolynLabs.AyuGramDesktop
-```
+Нужны свои [ключи API](docs/api_credentials.md).
 
-#### Scoop
+## Лицензия
 
-```bash
-scoop bucket add extras
-scoop install ayugram
-```
+GPL-3.0, см. [LICENSE](LICENSE). Это форк; копирайты Telegram Desktop и
+AyuGram Desktop сохранены в их файлах.
 
-#### Сборка вручную
+## Благодарности
 
-Следуйте [официальному руководству](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-win-x64.md), если
-вы хотите собрать AyuGram сами.
-
-### macOS
-
-#### Официальная версия
-
-Вы можете скачать подписанный пакет со вкладки [Releases](https://github.com/AyuGram/AyuGramDesktop/releases).
-
-#### Homebrew
-
-```bash
-brew install --cask ayugram
-```
-
-### Arch Linux
-
-#### Из исходников (рекомендованный способ)
-
-Установите `ayugram-desktop` из [AUR](https://aur.archlinux.org/packages/ayugram-desktop).
-
-#### Готовые бинарники
-
-Установите `ayugram-desktop-bin` из [AUR](https://aur.archlinux.org/packages/ayugram-desktop-bin).
-
-Примечание: данный пакет собирается не нами.
-
-### NixOS
-
-#### Флейк (рекомендуется)
-
-Установите `ayugram-desktop` из [ndfined-crp/ayugram-desktop](https://github.com/ndfined-crp/ayugram-desktop)
-
-#### Nixpkgs
-
-Установите `ayugram-desktop` из [nixpkgs](https://search.nixos.org/packages?channel=unstable&show=ayugram-desktop)
-
-### ALT Linux
-
-[Sisyphus](https://packages.altlinux.org/en/sisyphus/srpms/ayugram-desktop/)
-
-### Gentoo Linux
-
-Инструкцию по установке можно найти в [этом репозитории](https://codeberg.org/OverLessArtem/ayugram-ebuild-gentoo).
-
-### Void Linux
-Инструкцию по установке можно найти в [этом репозитории](https://codeberg.org/OverLessArtem/ayugram-template-void)
-
-### EPM
-
-`epm play ayugram`
-
-### Fedora
-
-Из репозитория [RPM Fusion](https://admin.rpmfusion.org/pkgdb/package/free/ayugram-desktop/).
-
-```bash
-dnf install ayugram-desktop
-```
-
-### Любой другой Линукс дистрибутив
-
-Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
-
-Или следуйте [официальному руководству](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
-
-## Пожертвования
-
-Вам нравится использовать **AyuGram**? Оставьте нам чаевые!
-
-[Здесь доступные варианты.](https://docs.ayugram.one/donate/)
-
-## Использованные материалы
-
-### Телеграм клиенты
-
+- [AyuGram Desktop](https://github.com/AyuGram/AyuGramDesktop) от Radolyn Labs —
+  основа клиента
 - [Telegram Desktop](https://github.com/telegramdesktop/tdesktop)
-- [Kotatogram](https://github.com/kotatogram/kotatogram-desktop)
-- [64Gram](https://github.com/TDesktop-x64/tdesktop)
-- [Forkgram](https://github.com/forkgram/tdesktop)
-
-### Использованные библиотеки
-
-- [JSON for Modern C++](https://github.com/nlohmann/json)
-- [SQLite](https://github.com/sqlite/sqlite)
-- [sqlite_orm](https://github.com/fnc12/sqlite_orm)
-
-### Иконки
-
-- [Solar Icon Set](https://www.figma.com/community/file/1166831539721848736)
-
-### Боты
-
-- [TelegramDB](https://t.me/tgdatabase) для получения юзернейма по ID (до закрытия бесплатной версии 2 апреля 2026)
+- [exteraGram](https://github.com/exteraSquad/exteraGram) и
+  [exDesktop](https://github.com/metawka/exDesktop) — по их хукам видно, куда
+  встраивать наши
+- Клиенты из благодарностей AyuGram: [Kotatogram](https://github.com/kotatogram/kotatogram-desktop),
+  [64Gram](https://github.com/TDesktop-x64/tdesktop),
+  [Forkgram](https://github.com/forkgram/tdesktop)
+- Библиотеки: [Lua](https://www.lua.org), [JSON for Modern C++](https://github.com/nlohmann/json),
+  [SQLite](https://github.com/sqlite/sqlite), [sqlite_orm](https://github.com/fnc12/sqlite_orm)

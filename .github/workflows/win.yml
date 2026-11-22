@@ -80,24 +80,13 @@ jobs:
         shell: bash
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
-      # TBuild is a symlink to C:. actions/checkout scopes its credentials
-      # with includeIf.gitdir on the symlinked path while git sees the real
-      # one, so a private repository fails to fetch. Hand git the auth
-      # header through GIT_CONFIG_* for the checkout step only.
-      - name: Checkout credentials.
-        id: auth
-        shell: bash
-        run: |
-          HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${{ github.token }}" | base64 -w0)"
-          echo "::add-mask::$HEADER"
-          echo "header=$HEADER" >> "$GITHUB_OUTPUT"
-
+      # The repository must stay public: TBuild is a symlink to C:, and
+      # actions/checkout scopes its credentials with includeIf.gitdir on the
+      # symlinked path while git sees the real one, so the first fetch goes
+      # without auth. Adding our own header instead collides with the one
+      # checkout sets for submodules ("Duplicate header", HTTP 400).
       - name: Clone.
         uses: actions/checkout@v7
-        env:
-          GIT_CONFIG_COUNT: 1
-          GIT_CONFIG_KEY_0: http.https://github.com/.extraheader
-          GIT_CONFIG_VALUE_0: ${{ steps.auth.outputs.header }}
         with:
           submodules: recursive
           path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}

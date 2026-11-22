@@ -8,7 +8,7 @@ Choose a folder for the future build, for example **/home/user/TBuild**. It will
 
 Install [poetry](https://python-poetry.org), [docker](https://www.docker.com/) and [docker-buildx](https://docs.docker.com/reference/cli/docker/buildx/), go to ***BuildPath*** and run
 
-    git clone --recursive https://github.com/AyuGram/AyuGramDesktop.git tdesktop
+    git clone --recursive https://github.com/fucksynth/fuckgram.git tdesktop
     ./tdesktop/Telegram/build/prepare/linux.sh
 
 ### Building the project
@@ -20,8 +20,8 @@ Go to ***BuildPath*/tdesktop** and run
         -v "$PWD:/usr/src/tdesktop" \
         ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
         /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-        -D TDESKTOP_API_ID=2040 \
-        -D TDESKTOP_API_HASH=b18441a1ff607e10a989891a5462e627
+        -D TDESKTOP_API_ID=YOUR_API_ID \
+        -D TDESKTOP_API_HASH=YOUR_API_HASH
 
 Or, to create a debug build, run
 
@@ -31,8 +31,8 @@ Or, to create a debug build, run
         -e CONFIG=Debug \
         ghcr.io/telegramdesktop/tdesktop/centos_env:latest \
         /usr/src/tdesktop/Telegram/build/docker/centos_env/build.sh \
-        -D TDESKTOP_API_ID=2040 \
-        -D TDESKTOP_API_HASH=b18441a1ff607e10a989891a5462e627
+        -D TDESKTOP_API_ID=YOUR_API_ID \
+        -D TDESKTOP_API_HASH=YOUR_API_HASH
 
 The built files will be in the `out` directory.
 
@@ -42,7 +42,7 @@ You can use `strip` command to reduce binary size.
 
 Ensure you've followed the instruction up to the [**Clone source code and prepare libraries**](#clone-source-code-and-prepare-libraries) step at least.
 
-Open the repository in Visual Studio Code, install the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension and add the following to `.vscode/settings.json` (using [your **api_id** and **api_hash**](#obtain-your-api-credentials)):
+Open the repository in Visual Studio Code, install the [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension and add the following to `.vscode/settings.json` (using [your **api_id** and **api_hash**](api_credentials.md)):
 
     {
         "cmake.configureSettings": {

@@ -1,156 +1,72 @@
-# AyuGram
+# fuckgram
 
-![AyuGram Logo](.github/AyuGram.png) ![AyuChan](.github/AyuChan.png)
+<img src="Telegram/Resources/art/icon256.png" width="96" align="right" alt="fuckgram icon">
 
-[ English  |   [Русский](README-RU.md) ]
+[ English | [Русский](README-RU.md) ]
+
+A Telegram Desktop client with a plugin core on Lua. Based on
+[AyuGram Desktop](https://github.com/AyuGram/AyuGramDesktop), which is based
+on [Telegram Desktop](https://github.com/telegramdesktop/tdesktop).
+
+[![Windows](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml/badge.svg?branch=dev)](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
+
+> **Early development.** There are no releases yet. Test builds for Windows
+> are produced by GitHub Actions on every push to `dev`.
 
 ## Features
 
-- Full ghost mode (flexible)
-- Messages history
-- Anti-recall
-- Font customization
+Everything AyuGram Desktop has:
+
+- Ghost mode (flexible)
+- Message history and anti-recall
 - Streamer mode
-- Local Telegram Premium
 - Translator
-- Media preview & quick reaction on force click (macOS)
-- Enhanced appearance
+- Font and appearance customization
+- Local Telegram Premium features
 
-And many more. Check out our [Documentation](https://docs.ayugram.one/desktop/).
+Plus, in progress:
 
-<h3>
-  <details>
-    <summary>Preview</summary>
-    <table>
-      <tr>
-        <td><img src='.github/demos/demo1.png' width='268' alt='Preferences'></td>
-        <td><img src='.github/demos/demo2.png' width='268' alt='AyuGram Options'></td>
-        <td><img src='.github/demos/demo3.png' width='268' alt='Message Filters'></td>
-      </tr>
-      <tr>
-        <td><img src='.github/demos/demo4.png' width='268' alt='Appearance'></td>
-        <td><img src='.github/demos/demo5.png' width='268' alt='Chats'></td>
-      </tr>
-    </table>
-  </details>
-</h3>
+- **Plugins on Lua 5.4.** Every plugin runs in its own Lua state with memory
+  and time limits and no access to the file system, processes or native code.
+- **Permissions checked before install.** A plugin declares what it needs in
+  its manifest; the code is analysed on import and a plugin that uses more
+  than it declares is rejected.
+- **`.flua` packages**: manifest, code and resources in one signed file.
+- **A small, stable hook surface.** Client code talks to plugins only through
+  `Telegram/SourceFiles/plugins/plugins_hooks.h`, so updating to a new
+  AyuGram / Telegram Desktop version stays cheap.
+
+See [docs/plugins.md](docs/plugins.md) for the design and the list of hooks.
 
 ## Downloads
 
-### Windows
+No releases yet. To try a test build, open the latest successful
+[Windows run](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
+and download the artifact.
 
-#### Official
+## Building
 
-You can download prebuilt Windows binary from [Releases tab](https://github.com/AyuGram/AyuGramDesktop/releases) or from
-the [Telegram channel](https://t.me/AyuGramReleases).
+- [Windows](docs/building-win.md)
+- [Linux](docs/building-linux.md)
+- [macOS](docs/building-mac.md)
 
-#### Winget
+You need your own [API credentials](docs/api_credentials.md).
 
-```bash
-winget install RadolynLabs.AyuGramDesktop
-```
+## License
 
-#### Scoop
-
-```bash
-scoop bucket add extras
-scoop install ayugram
-```
-
-#### Self-built
-
-Follow [official guide](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-win-x64.md) if you want to
-build by yourself.
-
-### macOS
-
-#### Official
-
-You can download prebuilt macOS package from [Releases tab](https://github.com/AyuGram/AyuGramDesktop/releases).
-
-#### Homebrew
-
-```bash
-brew install --cask ayugram
-```
-
-### Arch Linux
-
-#### From source (recommended)
-
-Install `ayugram-desktop` from [AUR](https://aur.archlinux.org/packages/ayugram-desktop).
-
-#### Prebuilt binaries
-
-Install `ayugram-desktop-bin` from [AUR](https://aur.archlinux.org/packages/ayugram-desktop-bin).
-
-Note: these binaries aren't officially maintained by us.
-
-### NixOS
-
-#### Flake (recommended)
-
-Install `ayugram-desktop` from [ndfined-crp/ayugram-desktop](https://github.com/ndfined-crp/ayugram-desktop)
-
-#### Nixpkgs
-
-Install `ayugram-desktop` from [nixpkgs](https://search.nixos.org/packages?channel=unstable&show=ayugram-desktop)
-
-### ALT Linux
-
-[Sisyphus](https://packages.altlinux.org/en/sisyphus/srpms/ayugram-desktop/)
-
-### Gentoo Linux
-
-See [this repository](https://codeberg.org/OverLessArtem/ayugram-ebuild-gentoo) for installation manual.
-
-### Void Linux
-See [this repository](https://codeberg.org/OverLessArtem/ayugram-template-void) for installation manual.
-
-### EPM
-
-`epm play ayugram`
-
-### Fedora
-
-From [RPM Fusion](https://admin.rpmfusion.org/pkgdb/package/free/ayugram-desktop/) repository.
-
-```bash
-dnf install ayugram-desktop
-```
-
-### Any other Linux distro
-
-Flatpak: https://github.com/0FL01/AyuGramDesktop-flatpak
-
-Or follow the [official guide](https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-linux.md).
-
-## Donation
-
-Enjoy using **AyuGram**? Consider sending us a tip!
-
-[Here's available methods.](https://docs.ayugram.one/donate/)
+GPL-3.0, see [LICENSE](LICENSE). This is a fork; the original copyright
+notices of Telegram Desktop and AyuGram Desktop are kept in their files.
 
 ## Credits
 
-### Telegram clients
-
+- [AyuGram Desktop](https://github.com/AyuGram/AyuGramDesktop) by Radolyn Labs,
+  the base of this client
 - [Telegram Desktop](https://github.com/telegramdesktop/tdesktop)
-- [Kotatogram](https://github.com/kotatogram/kotatogram-desktop)
-- [64Gram](https://github.com/TDesktop-x64/tdesktop)
-- [Forkgram](https://github.com/forkgram/tdesktop)
-
-### Libraries used
-
-- [JSON for Modern C++](https://github.com/nlohmann/json)
-- [SQLite](https://github.com/sqlite/sqlite)
-- [sqlite_orm](https://github.com/fnc12/sqlite_orm)
-- [androidx sources](https://github.com/androidx/androidx)
-
-### Icons
-
-- [Solar Icon Set](https://www.figma.com/community/file/1166831539721848736)
-
-### Bots
-
-- [TelegramDB](https://t.me/tgdatabase) for username lookup by ID (until closing free inline mode at 2 April 2026)
+- [exteraGram](https://github.com/exteraSquad/exteraGram) and
+  [exDesktop](https://github.com/metawka/exDesktop), whose plugin hooks showed
+  where to attach ours
+- Clients credited by AyuGram: [Kotatogram](https://github.com/kotatogram/kotatogram-desktop),
+  [64Gram](https://github.com/TDesktop-x64/tdesktop),
+  [Forkgram](https://github.com/forkgram/tdesktop)
+- Libraries: [Lua](https://www.lua.org), [JSON for Modern C++](https://github.com/nlohmann/json),
+  [SQLite](https://github.com/sqlite/sqlite), [sqlite_orm](https://github.com/fnc12/sqlite_orm)
