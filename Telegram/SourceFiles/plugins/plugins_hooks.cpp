@@ -7,7 +7,9 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/plugins_hooks.h"
 
 #include "core/application.h"
+#include "data/data_channel.h"
 #include "data/data_session.h"
+#include "data/data_user.h"
 #include "history/history.h"
 #include "history/view/history_view_element.h"
 #include "lang/lang_keys.h"
@@ -321,9 +323,14 @@ void RefreshDisplayText() {
 				}
 			}
 		};
-		data.enumerateUsers(refresh);
+		// Fn<void(not_null<UserData*>)> can't take a PeerData handler.
+		data.enumerateUsers([&](not_null<UserData*> user) {
+			refresh(user);
+		});
 		data.enumerateGroups(refresh);
-		data.enumerateBroadcasts(refresh);
+		data.enumerateBroadcasts([&](not_null<ChannelData*> channel) {
+			refresh(channel);
+		});
 	}
 }
 
