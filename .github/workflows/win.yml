@@ -37,6 +37,9 @@ concurrency:
   group: win-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   windows:
     name: Windows x64
@@ -77,20 +80,27 @@ jobs:
         shell: bash
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
-      # Checked out to a plain folder first: TBuild is a symlink to C:, and
-      # actions/checkout scopes its credentials to the symlinked path while
-      # git sees the real one, so a private repository fails to fetch.
+      # TBuild is a symlink to C:. actions/checkout scopes its credentials
+      # with includeIf.gitdir on the symlinked path while git sees the real
+      # one, so a private repository fails to fetch. Hand git the auth
+      # header through GIT_CONFIG_* for the checkout step only.
+      - name: Checkout credentials.
+        id: auth
+        shell: bash
+        run: |
+          HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${{ github.token }}" | base64 -w0)"
+          echo "::add-mask::$HEADER"
+          echo "header=$HEADER" >> "$GITHUB_OUTPUT"
+
       - name: Clone.
         uses: actions/checkout@v7
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: http.https://github.com/.extraheader
+          GIT_CONFIG_VALUE_0: ${{ steps.auth.outputs.header }}
         with:
           submodules: recursive
-          path: src
-
-      - name: Move sources into TBuild.
-        run: |
-          robocopy "%GITHUB_WORKSPACE%\src" "%USERPROFILE%\TBuild\%REPO_NAME%" /E /MOVE /MT:16 /NFL /NDL /NJH /NJS /NP
-          if %ERRORLEVEL% GEQ 8 exit /b %ERRORLEVEL%
-          exit /b 0
+          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
 
       - name: First set up.
         shell: bash
