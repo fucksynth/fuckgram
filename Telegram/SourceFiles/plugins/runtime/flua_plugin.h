@@ -8,6 +8,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 
 #include "base/weak_ptr.h"
 #include "data/data_peer_id.h"
+#include "plugins/plugins_hooks.h"
 #include "plugins/runtime/flua_package.h"
 
 #include <QtCore/QJsonObject>
@@ -26,6 +27,11 @@ enum class Event {
 	MessageNew,  // plugin.on("message.new", fn(message))
 	MessageSend, // plugin.on("message.send", fn(draft)) -> nil | false | text
 	AppState,    // plugin.on("app.state", fn(state))
+	UrlOpen,     // plugin.on("url.open", fn(link)) -> true handles it
+	Action,      // plugin.on("action", fn(action)) -> false cancels it
+	Display,     // plugin.on("display", fn(shown)) -> text replaces it
+	Screen,      // plugin.on("screen", fn(screen))
+	ProfileRows, // plugin.on("profile.rows", fn(peer)) -> { {label, value} }
 
 	Count,
 };
@@ -72,6 +78,15 @@ public:
 		const QString &text);
 	void appState(const QString &state);
 	void menuClicked(int ref, PeerData *peer, HistoryItem *item);
+	[[nodiscard]] bool urlOpen(const QString &url, bool local);
+	[[nodiscard]] bool action(const ClientEventArgs &args);
+	[[nodiscard]] std::optional<QString> display(
+		DisplayTextPlace place,
+		PeerData *peer,
+		HistoryItem *item,
+		const QString &text);
+	void screen(Plugins::Screen screen, PeerData *peer);
+	void profileRows(not_null<PeerData*> peer, std::vector<ProfileRow> &rows);
 
 private:
 	[[nodiscard]] static Plugin *From(lua_State *L);
@@ -88,6 +103,9 @@ private:
 	static int ApiSettingsSet(lua_State *L);
 	static int ApiToast(lua_State *L);
 	static int ApiSendMessage(lua_State *L);
+	static int ApiComposeGet(lua_State *L);
+	static int ApiComposeSet(lua_State *L);
+	static int ApiRefreshDisplay(lua_State *L);
 
 	void openLibraries();
 	void registerApi();
@@ -101,6 +119,8 @@ private:
 	void fail(const QString &error);
 
 	void pushMessage(not_null<HistoryItem*> item);
+	// Pushes { peer = ..., message = {...} } with what is known.
+	void pushContext(PeerData *peer, HistoryItem *item);
 	void loadSettings();
 	void saveSettings();
 

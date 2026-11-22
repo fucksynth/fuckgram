@@ -9194,3 +9194,16 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // fuckgram keys
 "fg_plugins" = "Plugins";
+"fg_plugins_enabled" = "Enabled";
+"fg_plugins_running" = "running";
+"fg_plugins_stopped" = "stopped";
+"fg_plugins_disabled" = "turned off";
+"fg_plugins_not_loaded" = "Not loaded:";
+"fg_plugins_empty" = "No plugins yet. Send a .flua file to any chat and open it, or put plugins into this folder:";
+"fg_plugins_open_folder" = "Open folder";
+"fg_plugins_install_title" = "Install plugin?";
+"fg_plugins_install" = "Install";
+"fg_plugins_installed" = "Plugin installed.";
+"fg_plugins_install_failed" = "Could not copy the plugin file.";
+"fg_plugins_bad_package" = "Not a plugin:";
+"fg_plugins_dev_folder" = "A development folder with this plugin id is already loaded.";

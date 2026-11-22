@@ -16,6 +16,11 @@ inline constexpr auto kPermMessagesRead = "messages.read";
 inline constexpr auto kPermMessagesSend = "messages.send";
 inline constexpr auto kPermUi = "ui";
 inline constexpr auto kPermStorage = "storage";
+inline constexpr auto kPermLinks = "links";
+inline constexpr auto kPermActions = "actions";
+inline constexpr auto kPermDisplay = "display";
+inline constexpr auto kPermChatsRead = "chats.read";
+inline constexpr auto kPermCompose = "compose";
 
 [[nodiscard]] const std::vector<QString> &KnownPermissions();
 

@@ -12,6 +12,14 @@ root. Put it into `plugins/` next to `tdata` (portable) or in the fuckgram data
 folder, then restart. Settings → Plugins lists what is loaded and the last
 error of each plugin. A full example: [`examples/plugins/hello`](../examples/plugins/hello).
 
+Pack a folder with `python tools/flua_pack.py <folder>`: it runs the same
+checks as the client and writes `<id>.flua`.
+
+To install a packed plugin, send the `.flua` file to any chat (Saved
+Messages works) and open it: the client shows what the plugin will be able to
+do and installs it on confirmation. Settings → Plugins turns plugins on and
+off and opens the plugins folder.
+
 ```json
 {
     "id": "example.hello",
@@ -28,10 +36,17 @@ error of each plugin. A full example: [`examples/plugins/hello`](../examples/plu
 | `plugin.on("message.new", fn(msg))` | `messages.read` | new incoming message |
 | `plugin.on("message.send", fn(draft))` | `messages.send` | outgoing text: return `false` to cancel, a string to replace, `nil` to keep |
 | `plugin.on("app.state", fn(state))` | — | `started`, `active`, `inactive`, `stopping` |
+| `plugin.on("url.open", fn(link))` | `links` | `link.url`, `link.local` (tg://); return `true` to handle it instead of the client |
+| `plugin.on("action", fn(action))` | `actions` | `action.type`: `reply`, `reaction`, `call`, `transcribe`, `notification`, `player.next`, `player.previous`, `player.stop`, `play`, `file.open`, `select`, `message.menu`, `header.click`; return `false` to cancel |
+| `plugin.on("display", fn(shown))` | `display` | `shown.place`: `message`, `chat.list`, `chat.title`, `chat.status`, `copy`; return a string to show (or copy) instead |
+| `plugin.on("screen", fn(screen))` | `chats.read` | `screen.screen`: `chat.list`, `chat`, `profile`; `screen.peer` |
+| `plugin.on("profile.rows", fn(peer))` | `ui` | return `{ { label = ..., value = ... }, ... }` to add rows to a profile |
 | `plugin.menu(place, text, fn(ctx))` | `ui` | menu item; `place` is `message`, `main`, `chat` or `profile`; `ctx.peer`, `ctx.message` |
 | `plugin.settings.get(key, default)`, `.set(key, value)` | `storage` | small values kept between runs |
 | `tg.toast(text)` | `ui` | short notice in the window |
 | `tg.messages.send(peer, text)` | `messages.send` | send a text message |
+| `tg.compose.get()`, `tg.compose.set(text)` | `compose` | the text in the current message field |
+| `tg.ui.refresh()` | `display` | re-apply `display` handlers to what is already shown |
 | `tg.log(...)`, `print(...)` | — | write to the client log |
 | `require("source.module")` | — | load `source/module.lua` or `lib/module.lua` from the package |
 | global `on_enable()`, `on_disable()` | — | called after the entry file ran and before the plugin stops |

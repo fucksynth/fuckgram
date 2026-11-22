@@ -72,7 +72,51 @@ void PushString(lua_State *L, const QString &value) {
 	case Event::MessageNew: return "message.new";
 	case Event::MessageSend: return "message.send";
 	case Event::AppState: return "app.state";
+	case Event::UrlOpen: return "url.open";
+	case Event::Action: return "action";
+	case Event::Display: return "display";
+	case Event::Screen: return "screen";
+	case Event::ProfileRows: return "profile.rows";
 	case Event::Count: break;
+	}
+	return "";
+}
+
+[[nodiscard]] const char *ActionName(ClientEvent event) {
+	switch (event) {
+	case ClientEvent::Reply: return "reply";
+	case ClientEvent::Reaction: return "reaction";
+	case ClientEvent::Call: return "call";
+	case ClientEvent::Transcribe: return "transcribe";
+	case ClientEvent::Notification: return "notification";
+	case ClientEvent::PlayerNext: return "player.next";
+	case ClientEvent::PlayerPrevious: return "player.previous";
+	case ClientEvent::PlayerStop: return "player.stop";
+	case ClientEvent::PlayMedia: return "play";
+	case ClientEvent::OpenFile: return "file.open";
+	case ClientEvent::SelectMessage: return "select";
+	case ClientEvent::MessageMenu: return "message.menu";
+	case ClientEvent::AvatarClick: return "header.click";
+	}
+	return "";
+}
+
+[[nodiscard]] const char *PlaceName(DisplayTextPlace place) {
+	switch (place) {
+	case DisplayTextPlace::Message: return "message";
+	case DisplayTextPlace::ChatListName: return "chat.list";
+	case DisplayTextPlace::ChatTitle: return "chat.title";
+	case DisplayTextPlace::ChatSubtitle: return "chat.status";
+	case DisplayTextPlace::CopiedText: return "copy";
+	}
+	return "";
+}
+
+[[nodiscard]] const char *ScreenName(Plugins::Screen screen) {
+	switch (screen) {
+	case Plugins::Screen::ChatList: return "chat.list";
+	case Plugins::Screen::Chat: return "chat";
+	case Plugins::Screen::Profile: return "profile";
 	}
 	return "";
 }
@@ -289,13 +333,21 @@ void Plugin::registerApi() {
 	lua_setfield(_lua, -2, "settings");
 	lua_setglobal(_lua, "plugin");
 
-	// tg = { log, toast, messages = { send } }
+	// tg = { log, toast, messages = { send }, compose = { get, set },
+	//       ui = { refresh } }
 	lua_newtable(_lua);
 	set("log", &Plugin::ApiPrint);
 	set("toast", &Plugin::ApiToast);
 	lua_newtable(_lua);
 	set("send", &Plugin::ApiSendMessage);
 	lua_setfield(_lua, -2, "messages");
+	lua_newtable(_lua);
+	set("get", &Plugin::ApiComposeGet);
+	set("set", &Plugin::ApiComposeSet);
+	lua_setfield(_lua, -2, "compose");
+	lua_newtable(_lua);
+	set("refresh", &Plugin::ApiRefreshDisplay);
+	lua_setfield(_lua, -2, "ui");
 	lua_setglobal(_lua, "tg");
 }
 
@@ -466,6 +518,178 @@ void Plugin::menuClicked(int ref, PeerData *peer, HistoryItem *item) {
 	call(1, 0, kClickBudget);
 }
 
+void Plugin::pushContext(PeerData *peer, HistoryItem *item) {
+	lua_createtable(_lua, 0, 3);
+	if (!peer && item) {
+		peer = item->history()->peer;
+	}
+	if (peer) {
+		lua_pushinteger(_lua, BotApiId(peer->id));
+		lua_setfield(_lua, -2, "peer");
+	}
+	if (item) {
+		pushMessage(item);
+		lua_setfield(_lua, -2, "message");
+	}
+}
+
+bool Plugin::urlOpen(const QString &url, bool local) {
+	const auto handlers = _handlers[size_t(Event::UrlOpen)];
+	for (const auto ref : handlers) {
+		if (!_lua) {
+			break;
+		}
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+		lua_createtable(_lua, 0, 2);
+		PushString(_lua, url);
+		lua_setfield(_lua, -2, "url");
+		lua_pushboolean(_lua, local ? 1 : 0);
+		lua_setfield(_lua, -2, "local");
+		if (!call(1, 1, kFilterBudget)) {
+			continue;
+		}
+		const auto handled = lua_toboolean(_lua, -1) != 0;
+		lua_pop(_lua, 1);
+		if (handled) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool Plugin::action(const ClientEventArgs &args) {
+	const auto handlers = _handlers[size_t(Event::Action)];
+	for (const auto ref : handlers) {
+		if (!_lua) {
+			break;
+		}
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+		pushContext(args.peer, args.item);
+		lua_pushstring(_lua, ActionName(args.event));
+		lua_setfield(_lua, -2, "type");
+		switch (args.event) {
+		case ClientEvent::Reaction:
+			PushString(_lua, args.emoji);
+			lua_setfield(_lua, -2, "emoji");
+			lua_pushinteger(_lua, lua_Integer(args.customEmojiId));
+			lua_setfield(_lua, -2, "custom_emoji_id");
+			lua_pushboolean(_lua, args.remove ? 1 : 0);
+			lua_setfield(_lua, -2, "remove");
+			break;
+		case ClientEvent::Call:
+			lua_pushboolean(_lua, args.video ? 1 : 0);
+			lua_setfield(_lua, -2, "video");
+			break;
+		case ClientEvent::Notification:
+			lua_pushboolean(_lua, args.reaction ? 1 : 0);
+			lua_setfield(_lua, -2, "reaction");
+			break;
+		case ClientEvent::OpenFile:
+			PushString(_lua, args.path);
+			lua_setfield(_lua, -2, "path");
+			break;
+		default:
+			break;
+		}
+		if (!call(1, 1, kFilterBudget)) {
+			continue;
+		}
+		const auto cancel = lua_isboolean(_lua, -1)
+			&& !lua_toboolean(_lua, -1);
+		lua_pop(_lua, 1);
+		if (cancel) {
+			return true;
+		}
+	}
+	return false;
+}
+
+std::optional<QString> Plugin::display(
+		DisplayTextPlace place,
+		PeerData *peer,
+		HistoryItem *item,
+		const QString &text) {
+	auto result = std::optional<QString>();
+	auto current = text;
+	const auto handlers = _handlers[size_t(Event::Display)];
+	for (const auto ref : handlers) {
+		if (!_lua) {
+			break;
+		}
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+		pushContext(peer, item);
+		lua_pushstring(_lua, PlaceName(place));
+		lua_setfield(_lua, -2, "place");
+		PushString(_lua, current);
+		lua_setfield(_lua, -2, "text");
+		if (!call(1, 1, kFilterBudget)) {
+			continue;
+		}
+		if (lua_type(_lua, -1) == LUA_TSTRING) {
+			current = ToString(_lua, -1);
+			result = current;
+		}
+		lua_pop(_lua, 1);
+	}
+	return result;
+}
+
+void Plugin::screen(Plugins::Screen screen, PeerData *peer) {
+	const auto handlers = _handlers[size_t(Event::Screen)];
+	for (const auto ref : handlers) {
+		if (!_lua) {
+			break;
+		}
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+		pushContext(peer, nullptr);
+		lua_pushstring(_lua, ScreenName(screen));
+		lua_setfield(_lua, -2, "screen");
+		call(1, 0, kEventBudget);
+	}
+}
+
+void Plugin::profileRows(
+		not_null<PeerData*> peer,
+		std::vector<ProfileRow> &rows) {
+	const auto handlers = _handlers[size_t(Event::ProfileRows)];
+	for (const auto ref : handlers) {
+		if (!_lua) {
+			break;
+		}
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+		lua_pushinteger(_lua, BotApiId(peer->id));
+		if (!call(1, 1, kFilterBudget)) {
+			continue;
+		}
+		// { { label = "...", value = "..." }, ... } or { { "label", "value" } }
+		if (lua_istable(_lua, -1)) {
+			const auto count = lua_rawlen(_lua, -1);
+			for (auto i = lua_Integer(1); i <= lua_Integer(count); ++i) {
+				lua_rawgeti(_lua, -1, i);
+				if (lua_istable(_lua, -1)) {
+					lua_getfield(_lua, -1, "label");
+					if (lua_isnil(_lua, -1)) {
+						lua_pop(_lua, 1);
+						lua_rawgeti(_lua, -1, 1);
+					}
+					lua_getfield(_lua, -2, "value");
+					if (lua_isnil(_lua, -1)) {
+						lua_pop(_lua, 1);
+						lua_rawgeti(_lua, -2, 2);
+					}
+					rows.push_back({
+						.label = ToString(_lua, -2),
+						.value = ToString(_lua, -1),
+					});
+					lua_pop(_lua, 2);
+				}
+				lua_pop(_lua, 1);
+			}
+		}
+		lua_pop(_lua, 1);
+	}
+}
+
 void Plugin::loadSettings() {
 	auto file = QFile(_dataPath + u"settings.json"_q);
 	if (file.open(QIODevice::ReadOnly)) {
@@ -562,6 +786,21 @@ int Plugin::ApiOn(lua_State *L) {
 		plugin->requirePermission(kPermMessagesSend);
 		break;
 	case Event::AppState:
+		break;
+	case Event::UrlOpen:
+		plugin->requirePermission(kPermLinks);
+		break;
+	case Event::Action:
+		plugin->requirePermission(kPermActions);
+		break;
+	case Event::Display:
+		plugin->requirePermission(kPermDisplay);
+		break;
+	case Event::Screen:
+		plugin->requirePermission(kPermChatsRead);
+		break;
+	case Event::ProfileRows:
+		plugin->requirePermission(kPermUi);
 		break;
 	case Event::Count:
 		return luaL_error(L, "unknown event: %s", name.toUtf8().constData());
@@ -690,6 +929,42 @@ int Plugin::ApiSendMessage(lua_State *L) {
 	});
 	lua_pushboolean(L, 1);
 	return 1;
+}
+
+int Plugin::ApiComposeGet(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermCompose);
+	if (const auto text = Plugins::ComposeText()) {
+		PushString(L, text->text);
+	} else {
+		lua_pushnil(L);
+	}
+	return 1;
+}
+
+int Plugin::ApiComposeSet(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermCompose);
+	const auto text = CheckString(L, 1);
+	if (!Plugins::ComposeText()) {
+		lua_pushboolean(L, 0);
+		return 1;
+	}
+	// Not in the middle of a hook: the field may be laying out right now.
+	crl::on_main(plugin, [=] {
+		Plugins::SetComposeText(TextWithTags{ text });
+	});
+	lua_pushboolean(L, 1);
+	return 1;
+}
+
+int Plugin::ApiRefreshDisplay(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermDisplay);
+	crl::on_main(plugin, [] {
+		Plugins::RefreshDisplayText();
+	});
+	return 0;
 }
 
 } // namespace Plugins::Flua
