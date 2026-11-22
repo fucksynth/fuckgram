@@ -55,20 +55,6 @@ jobs:
         shell: cmd
 
     steps:
-      - name: Clean up preinstalled software.
-        shell: pwsh
-        run: |
-          $before = (Get-PSDrive C).Free / 1GB
-          Get-Service docker -ErrorAction SilentlyContinue | Stop-Service -ErrorAction SilentlyContinue
-          wsl --shutdown 2> $null
-          Remove-Item "C:\Android\android-sdk", "C:\Program Files\dotnet", "C:\Miniconda", "C:\msys64", "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", "$env:LOCALAPPDATA\Docker", "C:\ProgramData\DockerDesktop", "C:\Program Files\PostgreSQL", "C:\PostgreSQL", "C:\Program Files\MongoDB", "C:\Program Files\MySQL" -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item "C:\ghcup", "C:\cabal", "C:\Program Files\LLVM", "C:\vcpkg", "C:\tools\kotlinc", "C:\tools\php", "C:\tools\Apache24", "C:\tools\nginx-*", "C:\selenium", "C:\SeleniumWebDrivers", "C:\Program Files\R", "C:\Program Files (x86)\R", "C:\rtools*", "C:\Program Files\Google\Chrome*", "C:\Program Files (x86)\Google\Chrome*", "C:\Program Files\Mozilla Firefox*", "C:\ProgramData\Package Cache" -Recurse -Force -ErrorAction SilentlyContinue
-          # The _Instances registry is how vswhere finds Visual Studio.
-          Get-ChildItem "C:\ProgramData\Microsoft\VisualStudio\Packages" -Exclude _Instances -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item C:\hostedtoolcache\windows\Go*, C:\hostedtoolcache\windows\Ruby*, C:\hostedtoolcache\windows\PyPy*, C:\hostedtoolcache\windows\Java_*, C:\hostedtoolcache\windows\NuGet* -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host ('{0:N1} GB -> {1:N1} GB free' -f $before, ((Get-PSDrive C).Free / 1GB))
-          exit 0
-
       - name: Prepare directories.
         run: |
           mkdir %userprofile%\TBuild\Libraries
@@ -138,6 +124,23 @@ jobs:
             ${{ runner.os }}-x64-libs-${{ env.CACHE_KEY }}-partial-
             ${{ runner.os }}-x64-libs-
 
+      # Takes 5+ minutes and is needed only to build the libraries: with
+      # them from the cache 30 GB free is enough for the client.
+      - name: Clean up preinstalled software.
+        if: steps.libs.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $before = (Get-PSDrive C).Free / 1GB
+          Get-Service docker -ErrorAction SilentlyContinue | Stop-Service -ErrorAction SilentlyContinue
+          wsl --shutdown 2> $null
+          Remove-Item "C:\Android\android-sdk", "C:\Program Files\dotnet", "C:\Miniconda", "C:\msys64", "$env:USERPROFILE\.cargo", "$env:USERPROFILE\.rustup", "$env:LOCALAPPDATA\Docker", "C:\ProgramData\DockerDesktop", "C:\Program Files\PostgreSQL", "C:\PostgreSQL", "C:\Program Files\MongoDB", "C:\Program Files\MySQL" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "C:\ghcup", "C:\cabal", "C:\Program Files\LLVM", "C:\vcpkg", "C:\tools\kotlinc", "C:\tools\php", "C:\tools\Apache24", "C:\tools\nginx-*", "C:\selenium", "C:\SeleniumWebDrivers", "C:\Program Files\R", "C:\Program Files (x86)\R", "C:\rtools*", "C:\Program Files\Google\Chrome*", "C:\Program Files (x86)\Google\Chrome*", "C:\Program Files\Mozilla Firefox*", "C:\ProgramData\Package Cache" -Recurse -Force -ErrorAction SilentlyContinue
+          # The _Instances registry is how vswhere finds Visual Studio.
+          Get-ChildItem "C:\ProgramData\Microsoft\VisualStudio\Packages" -Exclude _Instances -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item C:\hostedtoolcache\windows\Go*, C:\hostedtoolcache\windows\Ruby*, C:\hostedtoolcache\windows\PyPy*, C:\hostedtoolcache\windows\Java_*, C:\hostedtoolcache\windows\NuGet* -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host ('{0:N1} GB -> {1:N1} GB free' -f $before, ((Get-PSDrive C).Free / 1GB))
+          exit 0
+
       - name: Libraries.
         id: libraries
         timeout-minutes: 330
@@ -179,7 +182,47 @@ jobs:
           path: ${{ env.LibrariesPath }}
           key: ${{ runner.os }}-x64-libs-${{ env.CACHE_KEY }}
 
+      # Objects of an earlier build: only what changed since compiles again.
+      - name: Restore build cache.
+        id: out
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out
+          key: ${{ runner.os }}-x64-out-${{ env.BUILD_TYPE }}-${{ env.CACHE_KEY }}-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-x64-out-${{ env.BUILD_TYPE }}-${{ env.CACHE_KEY }}-
+
+      # A fresh checkout makes every source newer than the cached objects.
+      # All sources get an old time, then the files changed since the
+      # cached build are touched: MSBuild rebuilds them and what includes
+      # them. If anything is unclear the cache is dropped, a full build is
+      # always correct.
+      - name: Keep unchanged sources older than the cached build.
+        if: steps.out.outputs.cache-matched-key != ''
+        shell: bash
+        run: |
+          cd "$TBUILD/$REPO_NAME"
+          OLD="$(cat out/built-from.txt 2>/dev/null || true)"
+          if [ -z "$OLD" ] \
+            || ! git fetch --depth=1 origin "$OLD" \
+            || ! git diff --name-only "$OLD" HEAD > ../changed.txt; then
+            echo "The cached build is of an unknown commit, building everything."
+            rm -rf out
+            exit 0
+          fi
+          find . -path ./out -prune -o -path ./.git -prune -o -type f -print0 \
+            | xargs -0 touch -d '2000-01-01 00:00:00'
+          echo "Changed since $OLD:"
+          cat ../changed.txt
+          while IFS= read -r path; do
+            if [ -d "$path" ]; then
+              find "$path" -type f -print0 | xargs -0 -r touch
+            elif [ -f "$path" ]; then
+              touch "$path"
+            fi
+          done < ../changed.txt
+
       - name: Build.
+        id: build
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram
 
@@ -191,6 +234,19 @@ jobs:
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
 
           cmake --build ..\out --config %BUILD_TYPE% --parallel
+
+      # Also after a failed build: what compiled is not compiled again.
+      - name: Mark the build.
+        if: always() && (steps.build.outcome == 'success' || steps.build.outcome == 'failure')
+        shell: bash
+        run: echo "$GITHUB_SHA" > "$TBUILD/$REPO_NAME/out/built-from.txt"
+
+      - name: Save build cache.
+        if: always() && (steps.build.outcome == 'success' || steps.build.outcome == 'failure')
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}\out
+          key: ${{ runner.os }}-x64-out-${{ env.BUILD_TYPE }}-${{ env.CACHE_KEY }}-${{ github.sha }}
 
       - name: Collect artifact.
         run: |
