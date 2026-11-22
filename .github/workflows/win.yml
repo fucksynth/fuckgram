@@ -77,11 +77,20 @@ jobs:
         shell: bash
         run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
 
+      # Checked out to a plain folder first: TBuild is a symlink to C:, and
+      # actions/checkout scopes its credentials to the symlinked path while
+      # git sees the real one, so a private repository fails to fetch.
       - name: Clone.
         uses: actions/checkout@v7
         with:
           submodules: recursive
-          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
+          path: src
+
+      - name: Move sources into TBuild.
+        run: |
+          robocopy "%GITHUB_WORKSPACE%\src" "%USERPROFILE%\TBuild\%REPO_NAME%" /E /MOVE /MT:16 /NFL /NDL /NJH /NJS /NP
+          if %ERRORLEVEL% GEQ 8 exit /b %ERRORLEVEL%
+          exit /b 0
 
       - name: First set up.
         shell: bash
@@ -139,7 +148,7 @@ jobs:
       # If the first build did not finish (timeout/cancel), keep what was
       # built so the next run continues instead of starting over.
       - name: Save partial libraries cache.
-        if: always() && steps.libraries.outcome != 'success' && steps.libs.outputs.cache-hit != 'true'
+        if: always() && (steps.libraries.outcome == 'failure' || steps.libraries.outcome == 'cancelled') && steps.libs.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ env.LibrariesPath }}
