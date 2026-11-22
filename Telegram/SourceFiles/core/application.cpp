@@ -112,6 +112,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_infra.h"
 #include "ayu/ayu_settings.h"
 #include "ayu/features/streamer_mode/streamer_mode.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace Core {
@@ -262,6 +263,10 @@ void Application::closeAdditionalWindows() {
 }
 
 Application::~Application() {
+	// PLUGIN-HOOK: app_stop
+	Plugins::NotifyAppState(Plugins::AppState::Stopping);
+	Plugins::SetSink(nullptr);
+
 	if (_savedWindows) {
 		_savedWindows->writeNow();
 	}
@@ -482,6 +487,15 @@ void Application::run() {
 	processCreatedWindow(_lastActivePrimaryWindow);
 
 	_savedWindows->startRestore();
+
+	// PLUGIN-HOOK: app_state
+	Plugins::NotifyAppState(Plugins::AppState::Started);
+	appDeactivatedValue(
+	) | rpl::on_next([](bool deactivated) {
+		Plugins::NotifyAppState(deactivated
+			? Plugins::AppState::Inactive
+			: Plugins::AppState::Active);
+	}, _lifetime);
 
 	Test::Fire(u"launch_finished"_q);
 	Test::Start();
@@ -1258,6 +1272,10 @@ bool Application::openLocalUrl(const QString &url, QVariant context) {
 	const auto protocol = u"tg://"_q;
 	if (urlTrimmed.startsWith(protocol, Qt::CaseInsensitive)
 		&& !passcodeLocked()) {
+		// PLUGIN-HOOK: open_local_url
+		if (Plugins::OpenUrl(urlTrimmed, true)) {
+			return true;
+		}
 		const auto command = urlTrimmed.mid(protocol.size());
 		const auto my = context.value<ClickHandlerContext>();
 		const auto controller = my.sessionWindow.get()

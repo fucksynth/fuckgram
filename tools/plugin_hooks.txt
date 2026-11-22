@@ -1,0 +1,14 @@
+# Plugin hooks in client code, see Telegram/SourceFiles/plugins/plugins_hooks.h
+# One name per line; tools/check_plugin_hooks.py checks each is present once.
+
+send_message        # ApiWrap::sendMessage: cancel / modify text
+send_media          # ApiWrap::sendFiles: cancel files
+new_message         # Data::Session::addNewMessage
+open_url            # Core::UiIntegration::handleUrlClick (external links)
+open_local_url      # Core::Application::openLocalUrl (tg://)
+app_state           # Core::Application::run: started, active / inactive
+app_stop            # Core::Application::~Application
+screen_chat         # Window::SessionController: active chat changed
+screen_profile      # Window::SessionNavigation::showPeerInfo
+peer_menu_chat      # Window::Filler::fillHistoryActions
+peer_menu_profile   # Window::Filler::fillProfileActions

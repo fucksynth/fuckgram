@@ -1,0 +1,159 @@
+/*
+This file is part of fuckgram, a Telegram Desktop client based on AyuGram.
+
+For license and copyright information please follow this link:
+https://github.com/fucksynth/fuckgram/blob/main/LICENSE
+*/
+#pragma once
+
+#include "base/basic_types.h"
+#include "data/data_msg_id.h"
+#include "ui/text/text_entity.h"
+
+class History;
+class HistoryItem;
+class PeerData;
+
+namespace Ui::Menu {
+struct MenuCallback;
+} // namespace Ui::Menu
+
+// The only surface between the client and the plugin runtime.
+//
+// Every call from client code into this header is marked with
+// "// PLUGIN-HOOK: <name>", tools/check_plugin_hooks.py verifies after a
+// merge of a new AyuGram / Telegram Desktop version that none got lost.
+//
+// All functions are main-thread only. Without an attached runtime, or
+// with a hook nobody subscribed to, every call is a single bit test.
+namespace Plugins {
+
+enum class Hook : uint32 {
+	SendText,     // filter: cancel / modify outgoing text
+	SendMedia,    // filter: cancel outgoing files
+	NewMessage,   // event: a new message was added to a chat
+	OpenUrl,      // filter: external link or tg:// link
+	AppState,     // event: started / stopping / active / inactive
+	Screen,       // event: chat list, chat or profile shown
+	PeerMenu,     // ui: items in the chat and profile "..." menus
+
+	Count,
+};
+
+enum class Verdict {
+	Default,
+	Cancel,
+	Modify,
+};
+
+struct SendTextRequest {
+	not_null<History*> history;
+	TextWithTags text;
+	MsgId replyTo = 0;
+};
+
+struct SendTextResult {
+	Verdict verdict = Verdict::Default;
+	TextWithTags text; // used when verdict == Verdict::Modify
+};
+
+struct SendMediaRequest {
+	not_null<History*> history;
+	QStringList paths;
+	QString caption;
+};
+
+enum class AppState {
+	Started,
+	Stopping,
+	Active,
+	Inactive,
+};
+
+enum class Screen {
+	ChatList,
+	Chat,
+	Profile,
+};
+
+enum class PeerMenuPlace {
+	Chat,
+	Profile,
+};
+
+struct MenuItem {
+	QString text;
+	Fn<void()> handler;
+};
+
+// Implemented by the plugin runtime.
+class Sink {
+public:
+	virtual ~Sink() = default;
+
+	virtual SendTextResult sendText(const SendTextRequest &) {
+		return {};
+	}
+	// true cancels sending.
+	virtual bool sendMedia(const SendMediaRequest &) {
+		return false;
+	}
+	virtual void newMessage(not_null<HistoryItem*>) {
+	}
+	// true means the plugin handled the link and the client must not.
+	// local == true for tg:// links.
+	virtual bool openUrl(const QString &, bool) {
+		return false;
+	}
+	virtual void appState(AppState) {
+	}
+	virtual void screen(Screen, PeerData*) {
+	}
+	virtual void peerMenu(
+			PeerMenuPlace,
+			not_null<PeerData*>,
+			std::vector<MenuItem> &) {
+	}
+};
+
+// The runtime attaches itself and says which hooks it needs.
+void SetSink(Sink *sink); // nullptr detaches and disables every hook
+void SetEnabled(Hook hook, bool enabled);
+
+// While alive, the send hooks are skipped. The runtime wraps its own
+// sends with it, so a plugin never receives its own messages back.
+class BypassScope final {
+public:
+	BypassScope();
+	~BypassScope();
+
+	BypassScope(const BypassScope &) = delete;
+	BypassScope &operator=(const BypassScope &) = delete;
+
+};
+
+namespace details {
+extern uint64 EnabledMask;
+} // namespace details
+
+[[nodiscard]] inline bool Has(Hook hook) {
+	return (details::EnabledMask & (uint64(1) << uint32(hook))) != 0;
+}
+
+// Safe to call unconditionally: they return the default answer when no
+// runtime is attached or the hook is disabled.
+[[nodiscard]] SendTextResult FilterSendText(SendTextRequest &&request);
+[[nodiscard]] bool SendMedia(SendMediaRequest &&request);
+void NewMessage(not_null<HistoryItem*> item);
+[[nodiscard]] bool OpenUrl(const QString &url, bool local);
+void NotifyAppState(AppState state);
+void NotifyScreen(Screen screen, PeerData *peer);
+
+// Adds the plugin items: a "Plugins" submenu in the chat menu, plain
+// items in the profile menu.
+void FillPeerMenu(
+	PeerMenuPlace place,
+	not_null<PeerData*> peer,
+	const Ui::Menu::MenuCallback &addAction);
+
+} // namespace Plugins

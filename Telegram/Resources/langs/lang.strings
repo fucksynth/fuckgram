@@ -9191,3 +9191,6 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "ayu_AboutText1" = "ToS breaking Telegram client based on {api_link}.";
 "ayu_UpdateAyuGram" = "Update fuckgram";
 "ayu_UtilityRestartRequired" = "The app will close in 5 seconds.";
+
+// fuckgram keys
+"fg_plugins" = "Plugins";

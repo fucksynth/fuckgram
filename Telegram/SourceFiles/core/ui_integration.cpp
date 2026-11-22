@@ -43,6 +43,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_url_handlers.h"
 #include "ayu/features/streamer_mode/streamer_mode.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace Core {
@@ -424,6 +425,12 @@ bool UiIntegration::handleUrlClick(
 		return true;
 	}
 
+	// PLUGIN-HOOK: open_url
+	if (!local.startsWith(u"tg://"_q, Qt::CaseInsensitive)
+		&& !local.startsWith(u"internal:"_q, Qt::CaseInsensitive)
+		&& Plugins::OpenUrl(url, false)) {
+		return true;
+	}
 	if (UrlClickHandler::IsEmail(url)) {
 		File::OpenEmailLink(url);
 		return true;

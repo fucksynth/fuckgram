@@ -98,6 +98,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/data/messages_storage.h"
 #include "ayu/features/filters/filters_controller.h"
 #include "ayu/utils/telegram_helpers.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace Data {
@@ -3676,6 +3677,8 @@ HistoryItem *Session::addNewMessage(
 		type);
 	if (type == NewMessageType::Unread) {
 		CheckForSwitchInlineButton(result);
+		// PLUGIN-HOOK: new_message
+		Plugins::NewMessage(result);
 	}
 	return result;
 }

@@ -133,6 +133,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 
+#include "plugins/plugins_hooks.h"
+
 
 namespace Window {
 namespace {
@@ -1401,6 +1403,8 @@ void SessionNavigation::showPeerInfo(
 	//	Core::App().saveSettingsDelayed();
 	//}
 	showSection(std::make_shared<Info::Memento>(peer), params);
+	// PLUGIN-HOOK: screen_profile
+	Plugins::NotifyScreen(Plugins::Screen::Profile, peer);
 }
 
 void SessionNavigation::showPeerInfo(
@@ -1660,6 +1664,17 @@ SessionController::SessionController(
 	}) | rpl::on_next([=](Data::Folder *folder) {
 		folder->updateChatListSortPosition();
 		closeFolder();
+	}, lifetime());
+
+	// PLUGIN-HOOK: screen_chat
+	activeChatChanges(
+	) | rpl::on_next([=](Dialogs::Key key) {
+		const auto peer = key.peer();
+		crl::on_main(this, [=] {
+			Plugins::NotifyScreen(
+				peer ? Plugins::Screen::Chat : Plugins::Screen::ChatList,
+				peer);
+		});
 	}, lifetime());
 
 	const auto processFiltersMenu = [this] {

@@ -145,6 +145,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ui/context_menu/context_menu.h"
 #include "ayu/features/forward/ayu_forward.h"
 
+#include "plugins/plugins_hooks.h"
+
 
 namespace Window {
 namespace {
@@ -1952,10 +1954,24 @@ void Filler::fillHistoryActions() {
 	AyuUi::AddDeleteOwnMessagesAction(_peer, _topic, _controller, _addAction);
 	addDeleteChat();
 	addLeaveChat();
+	// PLUGIN-HOOK: peer_menu_chat
+	if (_peer) {
+		Plugins::FillPeerMenu(
+			Plugins::PeerMenuPlace::Chat,
+			_peer,
+			_addAction);
+	}
 }
 
 void Filler::fillProfileActions() {
 	addTTLSubmenu(true);
+	// PLUGIN-HOOK: peer_menu_profile
+	if (_peer) {
+		Plugins::FillPeerMenu(
+			Plugins::PeerMenuPlace::Profile,
+			_peer,
+			_addAction);
+	}
 	addSupportInfo();
 	addNewContact();
 	addShareContact();

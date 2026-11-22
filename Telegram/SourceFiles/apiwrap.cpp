@@ -113,6 +113,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_worker.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "ayu/features/forward/ayu_forward.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace {
@@ -4332,6 +4333,22 @@ void ApiWrap::sendFiles(
 		SendMediaType type,
 		std::shared_ptr<SendingAlbum> album,
 		SendAction action) {
+	// PLUGIN-HOOK: send_media
+	if (Plugins::Has(Plugins::Hook::SendMedia)) {
+		auto paths = QStringList();
+		for (const auto &file : list.files) {
+			paths.push_back(file.path);
+		}
+		if (Plugins::SendMedia({
+				.history = action.history,
+				.paths = std::move(paths),
+				.caption = (list.files.empty()
+					? QString()
+					: list.files.front().caption.text),
+			})) {
+			return;
+		}
+	}
 	const auto &ephemeral = _session->ephemeralMessages();
 	if (album && !ephemeral.isEphemeralBotReply(action.replyTo.messageId)) {
 		const auto peer = action.history->peer;
@@ -4759,6 +4776,20 @@ void ApiWrap::sendRichMessage(
 void ApiWrap::sendMessage(
 		MessageToSend &&message,
 		std::optional<MsgId> localMessageId) {
+	// PLUGIN-HOOK: send_message
+	if (Plugins::Has(Plugins::Hook::SendText)
+		&& !message.textWithTags.text.isEmpty()) {
+		auto hook = Plugins::FilterSendText({
+			.history = message.action.history,
+			.text = message.textWithTags,
+			.replyTo = message.action.replyTo.messageId.msg,
+		});
+		if (hook.verdict == Plugins::Verdict::Cancel) {
+			return;
+		} else if (hook.verdict == Plugins::Verdict::Modify) {
+			message.textWithTags = std::move(hook.text);
+		}
+	}
 	applyGhostScheduling(message.action, message.textWithTags.text);
 	const auto clearReplyTo = prependPseudoReply(message);
 
