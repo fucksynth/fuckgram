@@ -18,6 +18,9 @@ menus, settings), [`examples/plugins/weather`](../examples/plugins/weather)
 
 Pack a folder with `python tools/flua_pack.py <folder>`: it checks the
 manifest and writes `<id>.flua`. The code check below runs in the client.
+Types for the editor (lua-language-server) are in
+[`docs/sdk/fuckgram.lua`](sdk/fuckgram.lua): add `docs/sdk` to
+`workspace.library` for completion and checks of the whole API.
 
 ### Code check
 
@@ -69,9 +72,19 @@ off and opens the plugins folder.
 | `plugin.menu(place, text, fn(ctx))` | `ui` | menu item; `place` is `message`, `main`, `chat` or `profile`; `ctx.peer`, `ctx.message` |
 | `plugin.settings.get(key, default)`, `.set(key, value)` | `storage` | small values kept between runs |
 | `tg.toast(text)` | `ui` | short notice in the window |
-| `tg.messages.send(peer, text)` | `messages.send` | send a text message |
+| `tg.messages.send(peer, text, options)` | `messages.send` | send a text message; `options`: `reply_to` (message id), `silent`, `schedule` (unixtime) |
+| `tg.messages.edit(peer, id, text)` | `messages.manage` | edit a message you may edit |
+| `tg.messages.delete(peer, ids, revoke)` | `messages.manage` | delete up to 100 messages; `revoke` deletes for everyone where allowed; returns how many |
+| `tg.messages.get(peer, id)` | `messages.read` | a loaded message or `nil` |
+| `tg.peers.get(id)` | `chats.read` | `{ id, type, name, username, is_self, premium, verified }` of a known chat or user, `type` is `user`, `bot`, `group`, `supergroup` or `channel` |
+| `tg.me()` | `chats.read` | the same for your account |
+| `tg.chats.current()` | `chats.read` | id of the chat open in the active window |
 | `tg.compose.get()`, `tg.compose.set(text)` | `compose` | the text in the current message field |
 | `tg.ui.refresh()` | `display` | re-apply `display` handlers to what is already shown |
+| `tg.ui.alert(text, title)` | `ui` | a message box |
+| `tg.ui.confirm(text or { title, text, ok, cancel })` | `ui` | `true` / `false`; waits inside `tg.async` or takes a callback |
+| `tg.ui.input{ title, text, value, placeholder, ok, cancel }` | `ui` | the entered text or `nil`; waits inside `tg.async` or takes a callback |
+| `tg.ui.copy(text)` | `ui` | put text into the clipboard |
 | `tg.async(fn, ...)` | — | run `fn` as a coroutine; inside it `tg.http.request` waits for the reply without blocking the client |
 | `tg.http.request{ url, method, headers, body }` | `net:<host>` | HTTPS only, to declared hosts (`net:api.example.com`, `net:*.example.com`); returns `{ status, body, headers, error }`; no automatic redirects; pass a callback as the 2nd argument instead of using `tg.async` |
 | `tg.timer.after(ms, fn)`, `tg.timer.every(ms, fn)`, `tg.timer.cancel(id)` | — | one-shot and repeating timers (repeating ≥ 100 ms, up to 64) |
