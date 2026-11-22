@@ -102,11 +102,22 @@ void ParseManifest(Package &package) {
 	for (const auto value : json.value(u"permissions"_q).toArray()) {
 		const auto permission = value.toString();
 		const auto &known = KnownPermissions();
-		if (std::find(begin(known), end(known), permission) == end(known)) {
+		if (IsNetPermission(permission)) {
+			if (!NetHostPattern(permission)) {
+				package.error = u"bad network permission: "_q + permission;
+				return;
+			}
+		} else if (std::find(begin(known), end(known), permission)
+			== end(known)) {
 			package.error = u"unknown permission: "_q + permission;
 			return;
 		}
-		manifest.permissions.push_back(permission);
+		if (std::find(
+				begin(manifest.permissions),
+				end(manifest.permissions),
+				permission) == end(manifest.permissions)) {
+			manifest.permissions.push_back(permission);
+		}
 	}
 }
 
@@ -152,6 +163,52 @@ const std::vector<QString> &KnownPermissions() {
 		QString::fromLatin1(kPermCompose),
 	};
 	return result;
+}
+
+bool IsNetPermission(const QString &permission) {
+	return permission.startsWith(u"net:"_q);
+}
+
+std::optional<QString> NetHostPattern(const QString &permission) {
+	if (!IsNetPermission(permission)) {
+		return std::nullopt;
+	}
+	static const auto check = QRegularExpression(
+		u"^(\\*\\.)?[a-z0-9]([a-z0-9\\-]*[a-z0-9])?"
+		"(\\.[a-z0-9]([a-z0-9\\-]*[a-z0-9])?)+$"_q);
+	const auto host = permission.mid(4);
+	if (!check.match(host).hasMatch()) {
+		return std::nullopt;
+	}
+	return host;
+}
+
+bool Manifest::hostAllowed(const QString &host) const {
+	const auto lower = host.toLower();
+	for (const auto &permission : permissions) {
+		const auto pattern = NetHostPattern(permission);
+		if (!pattern) {
+			continue;
+		} else if (pattern->startsWith(u"*."_q)) {
+			// *.example.com: any subdomain, not example.com itself.
+			if (lower.endsWith(pattern->mid(1))
+				&& lower.size() > pattern->size() - 1) {
+				return true;
+			}
+		} else if (lower == *pattern) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool Manifest::hasNetwork() const {
+	for (const auto &permission : permissions) {
+		if (IsNetPermission(permission)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool Manifest::has(const char *permission) const {

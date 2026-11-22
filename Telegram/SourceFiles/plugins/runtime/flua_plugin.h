@@ -12,9 +12,13 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/runtime/flua_package.h"
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QPointer>
 
 struct lua_State;
 struct lua_Debug;
+
+class QNetworkAccessManager;
+class QNetworkReply;
 
 class HistoryItem;
 class PeerData;
@@ -106,6 +110,33 @@ private:
 	static int ApiComposeGet(lua_State *L);
 	static int ApiComposeSet(lua_State *L);
 	static int ApiRefreshDisplay(lua_State *L);
+	static int ApiAsync(lua_State *L);
+	static int ApiTimerAfter(lua_State *L);
+	static int ApiTimerEvery(lua_State *L);
+	static int ApiTimerCancel(lua_State *L);
+	static int ApiHttpRequest(lua_State *L);
+	static int ApiJsonEncode(lua_State *L);
+	static int ApiJsonDecode(lua_State *L);
+
+	struct Timer {
+		int ref = 0;
+		crl::time interval = 0;
+		bool repeat = false;
+	};
+	static int AddTimer(lua_State *L, bool repeat);
+	void scheduleTimer(int id);
+	void fireTimer(int id, int generation);
+
+	// Coroutines started by tg.async: thread -> registry reference.
+	// `nargs` values are on the thread's stack. `from` is the thread that
+	// resumes it (nullptr from the event loop), so Lua keeps counting the
+	// C stack depth and nested tg.async can't overflow it.
+	void resume(lua_State *thread, lua_State *from, int nargs);
+	void finishRequest(
+		QPointer<QNetworkReply> reply,
+		int generation,
+		int callbackRef,
+		lua_State *thread);
 
 	void openLibraries();
 	void registerApi();
@@ -137,6 +168,15 @@ private:
 	std::array<std::vector<int>, size_t(Event::Count)> _handlers;
 	std::vector<MenuEntry> _menu;
 	QJsonObject _settings;
+
+	// Bumped on every start / stop: async results of an older run are
+	// dropped instead of touching a closed or restarted state.
+	int _generation = 0;
+	int _nextTimerId = 0;
+	std::map<int, Timer> _timers;
+	std::map<lua_State*, int> _threads;
+	std::unique_ptr<QNetworkAccessManager> _network;
+	std::vector<QPointer<QNetworkReply>> _requests;
 
 };
 

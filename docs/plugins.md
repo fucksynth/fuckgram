@@ -2,15 +2,17 @@
 
 Status: **in development.** The Lua runtime (API version 1) is in the
 client: it checks every package by analysing its code, loads plugins, runs
-them in a sandbox and connects them to the hooks. Async calls, raw MTProto
-access from Lua and the `.flua` catalog are not done yet.
+them in a sandbox and connects them to the hooks. Raw MTProto access from Lua
+and the `.flua` catalog are not done yet.
 
 ## Writing a plugin (API 1)
 
 A plugin is a folder or a `.flua` archive (zip) with `manifest.json` at its
 root. Put it into `plugins/` next to `tdata` (portable) or in the fuckgram data
 folder, then restart. Settings → Plugins lists what is loaded and the last
-error of each plugin. A full example: [`examples/plugins/hello`](../examples/plugins/hello).
+error of each plugin. Examples: [`examples/plugins/hello`](../examples/plugins/hello) (send filter,
+menus, settings) and [`examples/plugins/weather`](../examples/plugins/weather)
+(`tg.async` + HTTP).
 
 Pack a folder with `python tools/flua_pack.py <folder>`: it checks the
 manifest and writes `<id>.flua`. The code check below runs in the client.
@@ -68,6 +70,10 @@ off and opens the plugins folder.
 | `tg.messages.send(peer, text)` | `messages.send` | send a text message |
 | `tg.compose.get()`, `tg.compose.set(text)` | `compose` | the text in the current message field |
 | `tg.ui.refresh()` | `display` | re-apply `display` handlers to what is already shown |
+| `tg.async(fn, ...)` | — | run `fn` as a coroutine; inside it `tg.http.request` waits for the reply without blocking the client |
+| `tg.http.request{ url, method, headers, body }` | `net:<host>` | HTTPS only, to declared hosts (`net:api.example.com`, `net:*.example.com`); returns `{ status, body, headers, error }`; no automatic redirects; pass a callback as the 2nd argument instead of using `tg.async` |
+| `tg.timer.after(ms, fn)`, `tg.timer.every(ms, fn)`, `tg.timer.cancel(id)` | — | one-shot and repeating timers (repeating ≥ 100 ms, up to 64) |
+| `tg.json.encode(value)`, `tg.json.decode(text)` | — | JSON ↔ Lua tables; `decode` returns `nil, error` on bad input |
 | `tg.log(...)`, `print(...)` | — | write to the client log |
 | `require("source.module")` | — | load `source/module.lua` or `lib/module.lua` from the package |
 | global `on_enable()`, `on_disable()` | — | called after the entry file ran and before the plugin stops |

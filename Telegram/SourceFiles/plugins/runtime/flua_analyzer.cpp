@@ -63,11 +63,25 @@ struct ApiEntry {
 	const char *permission; // needed to touch it, nullptr for none
 };
 
+// Stands for "any net:<host> permission": the hosts are checked at run
+// time, the code check only sees that the network is used.
+constexpr auto kNetwork = "net";
+
 const ApiEntry kApi[] = {
 	{ "tg", ApiType::Table, nullptr },
 	{ "tg.messages", ApiType::Table, nullptr },
 	{ "tg.compose", ApiType::Table, nullptr },
 	{ "tg.ui", ApiType::Table, nullptr },
+	{ "tg.timer", ApiType::Table, nullptr },
+	{ "tg.http", ApiType::Table, nullptr },
+	{ "tg.json", ApiType::Table, nullptr },
+	{ "tg.async", ApiType::Function, nullptr },
+	{ "tg.timer.after", ApiType::Function, nullptr },
+	{ "tg.timer.every", ApiType::Function, nullptr },
+	{ "tg.timer.cancel", ApiType::Function, nullptr },
+	{ "tg.http.request", ApiType::Function, kNetwork },
+	{ "tg.json.encode", ApiType::Function, nullptr },
+	{ "tg.json.decode", ApiType::Function, nullptr },
 	{ "plugin", ApiType::Table, nullptr },
 	{ "plugin.settings", ApiType::Table, nullptr },
 	{ "tg.log", ApiType::Function, nullptr },
@@ -714,8 +728,16 @@ QString AnalyzePackage(const Package &package) {
 			analyzer.permissions().end());
 	}
 
-	const auto &declared = package.manifest.permissions;
+	const auto &manifest = package.manifest;
+	const auto &declared = manifest.permissions;
 	for (const auto &permission : used) {
+		if (permission == kNetwork) {
+			if (!manifest.hasNetwork()) {
+				return u"the code uses tg.http but manifest.json declares "
+					"no net:<host> permission"_q;
+			}
+			continue;
+		}
 		const auto name = QString::fromStdString(permission);
 		if (std::find(begin(declared), end(declared), name) == end(declared)) {
 			return u"the code uses '"_q
@@ -724,7 +746,10 @@ QString AnalyzePackage(const Package &package) {
 		}
 	}
 	for (const auto &permission : declared) {
-		if (!used.contains(permission.toStdString())) {
+		const auto key = IsNetPermission(permission)
+			? std::string(kNetwork)
+			: permission.toStdString();
+		if (!used.contains(key)) {
 			return u"manifest.json declares '"_q
 				+ permission
 				+ u"' but the code never uses it"_q;

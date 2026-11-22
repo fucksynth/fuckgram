@@ -24,6 +24,11 @@ inline constexpr auto kPermCompose = "compose";
 
 [[nodiscard]] const std::vector<QString> &KnownPermissions();
 
+// "net:api.example.com" or "net:*.example.com": HTTPS requests to that
+// host (or its subdomains). The host part of a valid one, or nullopt.
+[[nodiscard]] bool IsNetPermission(const QString &permission);
+[[nodiscard]] std::optional<QString> NetHostPattern(const QString &permission);
+
 struct Manifest {
 	QString id;
 	QString name;
@@ -36,6 +41,8 @@ struct Manifest {
 	std::vector<QString> permissions;
 
 	[[nodiscard]] bool has(const char *permission) const;
+	[[nodiscard]] bool hasNetwork() const;
+	[[nodiscard]] bool hostAllowed(const QString &host) const;
 };
 
 // The whole package in memory: a .flua archive (zip) or an unpacked

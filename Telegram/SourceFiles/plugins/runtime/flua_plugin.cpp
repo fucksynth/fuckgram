@@ -22,10 +22,17 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
 
+#include "base/call_delayed.h"
+
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QUrl>
+#include <QtNetwork/QNetworkAccessManager>
+#include <QtNetwork/QNetworkReply>
+#include <QtNetwork/QNetworkRequest>
 
 // Lua is built as C++ (see cmake/lib_lua.cmake): no extern "C" here.
 #include "lua.h"
@@ -44,6 +51,14 @@ constexpr auto kEventBudget = crl::time(200);
 constexpr auto kClickBudget = crl::time(1000);
 constexpr auto kLoadedKey = "fuckgram.loaded";
 constexpr auto kChannelShift = int64(1000000000000LL);
+constexpr auto kMaxTimers = size_t(64);
+constexpr auto kMinRepeat = lua_Integer(100);
+constexpr auto kMaxDelay = lua_Integer(24 * 3600 * 1000);
+constexpr auto kMaxRequests = 16;
+constexpr auto kMaxRequestBody = 1024 * 1024;
+constexpr auto kMaxResponseBody = qint64(4 * 1024 * 1024);
+constexpr auto kRequestTimeout = 20000;
+constexpr auto kMaxJsonDepth = 64;
 
 void PushString(lua_State *L, const QString &value) {
 	const auto utf8 = value.toUtf8();
@@ -60,6 +75,111 @@ void PushString(lua_State *L, const QString &value) {
 	auto size = size_t(0);
 	const auto data = luaL_checklstring(L, index, &size);
 	return QString::fromUtf8(data, int(size));
+}
+
+void PushJson(lua_State *L, const QJsonValue &value, int depth) {
+	if (depth > kMaxJsonDepth) {
+		luaL_error(L, "JSON is nested too deep");
+	}
+	luaL_checkstack(L, 3, "JSON");
+	switch (value.type()) {
+	case QJsonValue::Bool:
+		lua_pushboolean(L, value.toBool() ? 1 : 0);
+		break;
+	case QJsonValue::Double: {
+		const auto number = value.toDouble();
+		if (std::floor(number) == number
+			&& std::abs(number) < 9007199254740992.) {
+			lua_pushinteger(L, lua_Integer(number));
+		} else {
+			lua_pushnumber(L, number);
+		}
+	} break;
+	case QJsonValue::String:
+		PushString(L, value.toString());
+		break;
+	case QJsonValue::Array: {
+		const auto array = value.toArray();
+		lua_createtable(L, int(array.size()), 0);
+		auto index = lua_Integer(0);
+		for (const auto item : array) {
+			PushJson(L, item, depth + 1);
+			lua_rawseti(L, -2, ++index);
+		}
+	} break;
+	case QJsonValue::Object: {
+		const auto object = value.toObject();
+		lua_createtable(L, 0, int(object.size()));
+		for (auto i = object.begin(); i != object.end(); ++i) {
+			PushJson(L, i.value(), depth + 1);
+			lua_setfield(L, -2, i.key().toUtf8().constData());
+		}
+	} break;
+	default:
+		lua_pushnil(L);
+		break;
+	}
+}
+
+[[nodiscard]] QJsonValue ToJson(lua_State *L, int index, int depth) {
+	index = lua_absindex(L, index);
+	if (depth > kMaxJsonDepth) {
+		luaL_error(L, "value is nested too deep for JSON");
+	}
+	luaL_checkstack(L, 3, "JSON");
+	switch (lua_type(L, index)) {
+	case LUA_TNIL:
+		return QJsonValue(QJsonValue::Null);
+	case LUA_TBOOLEAN:
+		return QJsonValue(lua_toboolean(L, index) != 0);
+	case LUA_TNUMBER:
+		return lua_isinteger(L, index)
+			? QJsonValue(qint64(lua_tointeger(L, index)))
+			: QJsonValue(lua_tonumber(L, index));
+	case LUA_TSTRING:
+		return QJsonValue(ToString(L, index));
+	case LUA_TTABLE: {
+		const auto length = lua_Integer(lua_rawlen(L, index));
+		auto count = lua_Integer(0);
+		lua_pushnil(L);
+		while (lua_next(L, index)) {
+			++count;
+			lua_pop(L, 1);
+		}
+		if (length > 0 && count == length) {
+			auto array = QJsonArray();
+			for (auto i = lua_Integer(1); i <= length; ++i) {
+				lua_rawgeti(L, index, i);
+				array.push_back(ToJson(L, -1, depth + 1));
+				lua_pop(L, 1);
+			}
+			return array;
+		}
+		auto object = QJsonObject();
+		lua_pushnil(L);
+		while (lua_next(L, index)) {
+			if (lua_type(L, -2) != LUA_TSTRING) {
+				luaL_error(L, "JSON object keys must be strings");
+			}
+			const auto key = ToString(L, -2);
+			object.insert(key, ToJson(L, -1, depth + 1));
+			lua_pop(L, 1);
+		}
+		return object;
+	}
+	default:
+		luaL_error(
+			L,
+			"a %s value can't be written as JSON",
+			luaL_typename(L, index));
+	}
+	return QJsonValue();
+}
+
+[[nodiscard]] QByteArray ToBytes(lua_State *L, int index) {
+	auto size = size_t(0);
+	const auto data = lua_tolstring(L, index, &size);
+	return data ? QByteArray(data, int(size)) : QByteArray();
 }
 
 [[nodiscard]] Main::Session *ActiveSession() {
@@ -209,6 +329,7 @@ bool Plugin::start() {
 	if (_lua) {
 		return true;
 	}
+	++_generation;
 	_errors = 0;
 	_lastError = QString();
 	_memory = 0;
@@ -240,6 +361,15 @@ void Plugin::stop() {
 		return;
 	}
 	callGlobal("on_disable", kEventBudget);
+	// Late timers and replies of this run must not reach the next one.
+	++_generation;
+	for (const auto &reply : base::take(_requests)) {
+		if (reply) {
+			reply->abort();
+		}
+	}
+	_timers.clear();
+	_threads.clear();
 	lua_close(_lua);
 	_lua = nullptr;
 	for (auto &list : _handlers) {
@@ -348,6 +478,19 @@ void Plugin::registerApi() {
 	lua_newtable(_lua);
 	set("refresh", &Plugin::ApiRefreshDisplay);
 	lua_setfield(_lua, -2, "ui");
+	set("async", &Plugin::ApiAsync);
+	lua_newtable(_lua);
+	set("after", &Plugin::ApiTimerAfter);
+	set("every", &Plugin::ApiTimerEvery);
+	set("cancel", &Plugin::ApiTimerCancel);
+	lua_setfield(_lua, -2, "timer");
+	lua_newtable(_lua);
+	set("request", &Plugin::ApiHttpRequest);
+	lua_setfield(_lua, -2, "http");
+	lua_newtable(_lua);
+	set("encode", &Plugin::ApiJsonEncode);
+	set("decode", &Plugin::ApiJsonDecode);
+	lua_setfield(_lua, -2, "json");
 	lua_setglobal(_lua, "tg");
 }
 
@@ -965,6 +1108,304 @@ int Plugin::ApiRefreshDisplay(lua_State *L) {
 		Plugins::RefreshDisplayText();
 	});
 	return 0;
+}
+
+// Async: coroutines, timers, HTTP.
+
+void Plugin::resume(lua_State *thread, lua_State *from, int nargs) {
+	auto results = 0;
+	const auto status = lua_resume(thread, from, nargs, &results);
+	if (status == LUA_YIELD) {
+		lua_pop(thread, results);
+		return; // Waits for a reply, resumed by finishRequest().
+	} else if (status != LUA_OK) {
+		const auto message = lua_tostring(thread, -1);
+		luaL_traceback(
+			_lua,
+			thread,
+			message ? message : "(error object)",
+			0);
+		const auto error = ToString(_lua, -1);
+		lua_pop(_lua, 1);
+		fail(error);
+	}
+	if (const auto i = _threads.find(thread); i != end(_threads)) {
+		luaL_unref(_lua, LUA_REGISTRYINDEX, i->second);
+		_threads.erase(i);
+	}
+}
+
+int Plugin::ApiAsync(lua_State *L) {
+	const auto plugin = From(L);
+	luaL_checktype(L, 1, LUA_TFUNCTION);
+	const auto nargs = lua_gettop(L) - 1;
+	const auto thread = lua_newthread(L); // L: fn, args..., thread
+	lua_insert(L, 1);                     // L: thread, fn, args...
+	lua_xmove(L, thread, nargs + 1);      // thread: fn, args...
+	plugin->_threads.emplace(thread, luaL_ref(L, LUA_REGISTRYINDEX));
+	plugin->resume(thread, L, nargs);
+	return 0;
+}
+
+int Plugin::AddTimer(lua_State *L, bool repeat) {
+	const auto plugin = From(L);
+	const auto delay = luaL_checkinteger(L, 1);
+	luaL_checktype(L, 2, LUA_TFUNCTION);
+	if (delay < 0 || delay > kMaxDelay) {
+		return luaL_error(L, "timer delay must be 0..86400000 ms");
+	} else if (repeat && delay < kMinRepeat) {
+		return luaL_error(L, "repeating timers need at least 100 ms");
+	} else if (plugin->_timers.size() >= kMaxTimers) {
+		return luaL_error(L, "too many timers");
+	}
+	lua_pushvalue(L, 2);
+	const auto id = ++plugin->_nextTimerId;
+	plugin->_timers.emplace(id, Timer{
+		.ref = luaL_ref(L, LUA_REGISTRYINDEX),
+		.interval = crl::time(delay),
+		.repeat = repeat,
+	});
+	plugin->scheduleTimer(id);
+	lua_pushinteger(L, id);
+	return 1;
+}
+
+int Plugin::ApiTimerAfter(lua_State *L) {
+	return AddTimer(L, false);
+}
+
+int Plugin::ApiTimerEvery(lua_State *L) {
+	return AddTimer(L, true);
+}
+
+int Plugin::ApiTimerCancel(lua_State *L) {
+	const auto plugin = From(L);
+	const auto id = int(luaL_checkinteger(L, 1));
+	if (const auto i = plugin->_timers.find(id); i != end(plugin->_timers)) {
+		luaL_unref(L, LUA_REGISTRYINDEX, i->second.ref);
+		plugin->_timers.erase(i);
+	}
+	return 0;
+}
+
+void Plugin::scheduleTimer(int id) {
+	const auto i = _timers.find(id);
+	if (i == end(_timers)) {
+		return;
+	}
+	const auto generation = _generation;
+	base::call_delayed(i->second.interval, this, [=] {
+		fireTimer(id, generation);
+	});
+}
+
+void Plugin::fireTimer(int id, int generation) {
+	if (generation != _generation || !_lua) {
+		return;
+	}
+	const auto i = _timers.find(id);
+	if (i == end(_timers)) {
+		return;
+	}
+	const auto timer = i->second;
+	if (!timer.repeat) {
+		_timers.erase(i);
+	}
+	lua_rawgeti(_lua, LUA_REGISTRYINDEX, timer.ref);
+	call(0, 0, kEventBudget);
+	if (!_lua || generation != _generation) {
+		return;
+	} else if (!timer.repeat) {
+		luaL_unref(_lua, LUA_REGISTRYINDEX, timer.ref);
+	} else if (_timers.contains(id)) {
+		scheduleTimer(id);
+	}
+}
+
+int Plugin::ApiHttpRequest(lua_State *L) {
+	const auto plugin = From(L);
+	luaL_checktype(L, 1, LUA_TTABLE);
+	const auto callback = lua_isfunction(L, 2);
+	if (!callback && !plugin->_threads.contains(L)) {
+		return luaL_error(
+			L,
+			"tg.http.request needs a callback or a tg.async(...) coroutine");
+	}
+	std::erase_if(plugin->_requests, [](const QPointer<QNetworkReply> &r) {
+		return !r;
+	});
+	if (int(plugin->_requests.size()) >= kMaxRequests) {
+		return luaL_error(L, "too many requests at once");
+	}
+
+	const auto field = [&](const char *name) {
+		lua_getfield(L, 1, name);
+		auto result = lua_isstring(L, -1) ? ToBytes(L, -1) : QByteArray();
+		lua_pop(L, 1);
+		return result;
+	};
+	const auto url = QUrl(QString::fromUtf8(field("url")));
+	auto method = field("method").toUpper();
+	if (method.isEmpty()) {
+		method = "GET";
+	}
+	const auto body = field("body");
+	if (!url.isValid() || url.scheme() != u"https"_q) {
+		return luaL_error(L, "only https:// URLs are allowed");
+	} else if (!plugin->manifest().hostAllowed(url.host())) {
+		return luaL_error(
+			L,
+			"host %s is not declared (add \"net:%s\" to permissions)",
+			url.host().toUtf8().constData(),
+			url.host().toUtf8().constData());
+	} else if (body.size() > kMaxRequestBody) {
+		return luaL_error(L, "request body is too large");
+	}
+	static const auto methodCheck = QRegularExpression(u"^[A-Z]{1,16}$"_q);
+	if (!methodCheck.match(QString::fromLatin1(method)).hasMatch()) {
+		return luaL_error(L, "bad HTTP method");
+	}
+
+	auto request = QNetworkRequest(url);
+	// No automatic redirects: they could lead to an undeclared host.
+	request.setAttribute(
+		QNetworkRequest::RedirectPolicyAttribute,
+		QNetworkRequest::ManualRedirectPolicy);
+	request.setTransferTimeout(kRequestTimeout);
+	lua_getfield(L, 1, "headers");
+	if (lua_istable(L, -1)) {
+		lua_pushnil(L);
+		while (lua_next(L, -2)) {
+			if (lua_type(L, -2) == LUA_TSTRING && lua_isstring(L, -1)) {
+				request.setRawHeader(ToBytes(L, -2), ToBytes(L, -1));
+			}
+			lua_pop(L, 1);
+		}
+	}
+	lua_pop(L, 1);
+
+	if (!plugin->_network) {
+		plugin->_network = std::make_unique<QNetworkAccessManager>();
+	}
+	const auto reply = plugin->_network->sendCustomRequest(
+		request,
+		method,
+		body);
+	plugin->_requests.push_back(reply);
+
+	auto callbackRef = LUA_NOREF;
+	if (callback) {
+		lua_pushvalue(L, 2);
+		callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
+	}
+	const auto thread = callback ? nullptr : L;
+	const auto generation = plugin->_generation;
+	const auto weak = base::make_weak(plugin);
+	QObject::connect(
+		reply,
+		&QNetworkReply::downloadProgress,
+		reply,
+		[=](qint64 received, qint64) {
+			if (received > kMaxResponseBody) {
+				reply->abort();
+			}
+		});
+	QObject::connect(reply, &QNetworkReply::finished, reply, [=] {
+		reply->deleteLater();
+		if (const auto strong = weak.get()) {
+			strong->finishRequest(reply, generation, callbackRef, thread);
+		}
+	});
+	if (callback) {
+		return 0;
+	}
+	return lua_yield(L, 0); // resumed with the response by finishRequest()
+}
+
+void Plugin::finishRequest(
+		QPointer<QNetworkReply> reply,
+		int generation,
+		int callbackRef,
+		lua_State *thread) {
+	if (!reply || generation != _generation || !_lua) {
+		return;
+	}
+	std::erase_if(_requests, [&](const QPointer<QNetworkReply> &r) {
+		return !r || (r == reply);
+	});
+	const auto status = reply->attribute(
+		QNetworkRequest::HttpStatusCodeAttribute).toInt();
+	const auto body = reply->readAll().left(int(kMaxResponseBody));
+	const auto error = (reply->error() != QNetworkReply::NoError)
+		? reply->errorString()
+		: QString();
+	const auto headers = reply->rawHeaderPairs();
+
+	// { status, body, headers = { name = value }, error }
+	const auto push = [&](lua_State *to) {
+		lua_createtable(to, 0, 4);
+		lua_pushinteger(to, status);
+		lua_setfield(to, -2, "status");
+		lua_pushlstring(to, body.constData(), size_t(body.size()));
+		lua_setfield(to, -2, "body");
+		lua_createtable(to, 0, int(headers.size()));
+		for (const auto &header : headers) {
+			lua_pushlstring(
+				to,
+				header.second.constData(),
+				size_t(header.second.size()));
+			lua_setfield(to, -2, header.first.toLower().constData());
+		}
+		lua_setfield(to, -2, "headers");
+		if (!error.isEmpty()) {
+			PushString(to, error);
+			lua_setfield(to, -2, "error");
+		}
+	};
+
+	if (callbackRef != LUA_NOREF) {
+		lua_rawgeti(_lua, LUA_REGISTRYINDEX, callbackRef);
+		luaL_unref(_lua, LUA_REGISTRYINDEX, callbackRef);
+		push(_lua);
+		call(1, 0, kEventBudget);
+	} else if (thread && _threads.contains(thread)) {
+		_deadline = crl::now() + kEventBudget;
+		lua_sethook(thread, &Plugin::CountHook, LUA_MASKCOUNT, kHookInstructions);
+		push(thread);
+		resume(thread, nullptr, 1);
+	}
+}
+
+int Plugin::ApiJsonEncode(lua_State *L) {
+	luaL_checkany(L, 1);
+	// QJsonDocument holds only arrays and objects: wrap and unwrap.
+	auto wrapper = QJsonArray();
+	wrapper.push_back(ToJson(L, 1, 0));
+	const auto json = QJsonDocument(wrapper).toJson(QJsonDocument::Compact);
+	const auto inner = json.mid(1, json.size() - 2);
+	lua_pushlstring(L, inner.constData(), size_t(inner.size()));
+	return 1;
+}
+
+int Plugin::ApiJsonDecode(lua_State *L) {
+	auto size = size_t(0);
+	const auto data = luaL_checklstring(L, 1, &size);
+	auto error = QJsonParseError();
+	const auto document = QJsonDocument::fromJson(
+		QByteArray(data, int(size)),
+		&error);
+	if (error.error != QJsonParseError::NoError) {
+		lua_pushnil(L);
+		PushString(L, error.errorString());
+		return 2;
+	}
+	PushJson(
+		L,
+		document.isArray()
+			? QJsonValue(document.array())
+			: QJsonValue(document.object()),
+		0);
+	return 1;
 }
 
 } // namespace Plugins::Flua

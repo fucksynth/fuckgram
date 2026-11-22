@@ -77,7 +77,9 @@ void Toast(const QString &text) {
 	const auto pick = [&](const char *en, const char *russian) {
 		return QString::fromUtf8(ru ? russian : en);
 	};
-	if (is(kPermMessagesRead)) {
+	if (const auto host = NetHostPattern(permission)) {
+		return pick("connect to ", "подключаться к ") + *host;
+	} else if (is(kPermMessagesRead)) {
 		return pick("read new messages", "читать новые сообщения");
 	} else if (is(kPermMessagesSend)) {
 		return pick(

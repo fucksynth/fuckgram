@@ -19,6 +19,7 @@ KNOWN_PERMISSIONS = {
     "messages.read", "messages.send", "ui", "storage", "links",
     "actions", "display", "chats.read", "compose",
 }
+NET_HOST = r"^(\*\.)?[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)+$"
 NATIVE = (".dll", ".so", ".dylib", ".exe", ".pyd")
 MAX_FILE = 4 * 1024 * 1024
 MAX_TOTAL = 16 * 1024 * 1024
@@ -74,7 +75,10 @@ def check_manifest(root, files):
     if low > API_VERSION or high < API_VERSION:
         fail("needs plugin API %d-%d, the client has %d" % (low, high, API_VERSION))
     for permission in manifest.get("permissions", []):
-        if permission not in KNOWN_PERMISSIONS:
+        if permission.startswith("net:"):
+            if not re.match(NET_HOST, permission[4:]):
+                fail("bad network permission: " + permission)
+        elif permission not in KNOWN_PERMISSIONS:
             fail("unknown permission: " + permission)
     return manifest
 
