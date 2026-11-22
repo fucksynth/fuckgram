@@ -1843,6 +1843,8 @@ PRIVATE
     payments/payments_reaction_process.h
     plugins/plugins_hooks.cpp
     plugins/plugins_hooks.h
+    plugins/runtime/flua_analyzer.cpp
+    plugins/runtime/flua_analyzer.h
     plugins/runtime/flua_package.cpp
     plugins/runtime/flua_package.h
     plugins/runtime/flua_plugin.cpp

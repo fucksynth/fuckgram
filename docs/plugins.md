@@ -1,9 +1,9 @@
 # Plugins
 
 Status: **in development.** The Lua runtime (API version 1) is in the
-client: it loads plugins, runs them in a sandbox and connects a first set of
-events and functions to the hooks. Static permission analysis on import,
-async calls and the `.flua` catalog are not done yet.
+client: it checks every package by analysing its code, loads plugins, runs
+them in a sandbox and connects them to the hooks. Async calls, raw MTProto
+access from Lua and the `.flua` catalog are not done yet.
 
 ## Writing a plugin (API 1)
 
@@ -12,8 +12,29 @@ root. Put it into `plugins/` next to `tdata` (portable) or in the fuckgram data
 folder, then restart. Settings → Plugins lists what is loaded and the last
 error of each plugin. A full example: [`examples/plugins/hello`](../examples/plugins/hello).
 
-Pack a folder with `python tools/flua_pack.py <folder>`: it runs the same
-checks as the client and writes `<id>.flua`.
+Pack a folder with `python tools/flua_pack.py <folder>`: it checks the
+manifest and writes `<id>.flua`. The code check below runs in the client.
+
+### Code check
+
+Before a package is loaded or installed the client compiles every `.lua` file
+(without running it) and follows where `tg` and `plugin` go. The package is
+refused when:
+
+- the code uses something the manifest does not declare, or the manifest
+  declares a permission the code never uses;
+- an API name, event name or menu place is unknown or not a constant
+  string (`plugin.on(name, ...)` with a computed `name`);
+- an API table is indexed dynamically (`tg[x]`), stored in a table, global
+  or upvalue, passed to a function, returned, or walked with `pairs`;
+- `require` gets a computed module name;
+- the code touches `load`, `loadfile`, `dofile`, `rawget`, `rawset`, `debug`
+  and similar.
+
+Local aliases are fine: `local send = tg.messages.send` or
+`local m = tg.messages; m.send(peer, text)`. API functions (not tables) can be
+passed around, for example `pcall(tg.toast, text)`, except `plugin.on`,
+`plugin.menu` and `require`, which the check must see called directly.
 
 To install a packed plugin, send the `.flua` file to any chat (Saved
 Messages works) and open it: the client shows what the plugin will be able to

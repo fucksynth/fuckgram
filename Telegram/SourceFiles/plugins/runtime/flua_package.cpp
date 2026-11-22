@@ -6,6 +6,8 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 */
 #include "plugins/runtime/flua_package.h"
 
+#include "plugins/runtime/flua_analyzer.h"
+
 #include "base/zlib_help.h"
 #include "logs.h"
 
@@ -198,6 +200,9 @@ Package ReadPackageFile(const QString &path) {
 		}
 	}
 	ParseManifest(result);
+	if (result.error.isEmpty()) {
+		result.error = AnalyzePackage(result);
+	}
 	return result;
 }
 
@@ -222,6 +227,9 @@ Package ReadPackageFolder(const QString &path) {
 		}
 	}
 	ParseManifest(result);
+	if (result.error.isEmpty()) {
+		result.error = AnalyzePackage(result);
+	}
 	return result;
 }
 
