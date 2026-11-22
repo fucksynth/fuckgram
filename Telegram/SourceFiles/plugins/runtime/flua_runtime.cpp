@@ -26,6 +26,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "styles/style_layers.h"
 
 #include <QtCore/QDir>
+#include <QtCore/QDirIterator>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
@@ -202,7 +203,31 @@ void Stop() {
 	Instance = nullptr;
 }
 
-Host::Host() = default;
+namespace {
+
+// Changes when a file in the folder is added, removed or saved.
+[[nodiscard]] QString FolderStamp(const QString &folder) {
+	auto count = 0;
+	auto newest = qint64(0);
+	auto it = QDirIterator(
+		folder,
+		QDir::Files | QDir::NoDotAndDotDot,
+		QDirIterator::Subdirectories);
+	while (it.hasNext()) {
+		it.next();
+		++count;
+		newest = std::max(
+			newest,
+			it.fileInfo().lastModified().toMSecsSinceEpoch());
+	}
+	return QString::number(count) + u':' + QString::number(newest);
+}
+
+} // namespace
+
+Host::Host()
+: _devTimer([=] { checkDevFolders(); }) {
+}
 
 Host::~Host() {
 	stop();
@@ -223,6 +248,7 @@ void Host::start() {
 	}
 	SetSink(this);
 	refreshHooks();
+	watchDevFolders();
 	LOG(("Plugins: %1 loaded, %2 invalid, from %3"
 		).arg(_plugins.size()
 		).arg(_invalid.size()
@@ -255,8 +281,71 @@ void Host::load(const QString &path) {
 	}
 }
 
+void Host::watchDevFolders() {
+	_devStamps.clear();
+	const auto entries = QDir(PluginsPath()).entryInfoList(
+		QDir::Dirs | QDir::NoDotAndDotDot);
+	for (const auto &entry : entries) {
+		const auto path = entry.absoluteFilePath();
+		_devStamps.emplace(path, FolderStamp(path));
+	}
+	if (_devStamps.empty()) {
+		_devTimer.cancel();
+	} else {
+		_devTimer.callEach(1000);
+	}
+}
+
+void Host::checkDevFolders() {
+	auto changed = std::vector<QString>();
+	for (auto &[path, stamp] : _devStamps) {
+		auto now = FolderStamp(path);
+		if (now != stamp) {
+			stamp = std::move(now);
+			changed.push_back(path);
+		}
+	}
+	for (const auto &path : changed) {
+		reload(path);
+	}
+}
+
+void Host::reload(const QString &origin) {
+	auto name = QFileInfo(origin).fileName();
+	for (auto i = begin(_plugins); i != end(_plugins); ++i) {
+		if ((*i)->origin() == origin) {
+			name = (*i)->manifest().name;
+			(*i)->stop();
+			_plugins.erase(i);
+			break;
+		}
+	}
+	_invalid.erase(ranges::remove(_invalid, origin, &Invalid::origin), end(_invalid));
+	const auto invalid = _invalid.size();
+	load(origin);
+	refreshHooks();
+	const auto ru = Russian();
+	if (_invalid.size() > invalid) {
+		Toast((ru
+			? QString::fromUtf8("Плагин не загружен: ")
+			: u"Plugin not loaded: "_q) + _invalid.back().error);
+	} else if (!_plugins.empty()
+		&& _plugins.back()->origin() == origin
+		&& !_plugins.back()->lastError().isEmpty()) {
+		Toast((ru
+			? QString::fromUtf8("Ошибка плагина: ")
+			: u"Plugin error: "_q) + _plugins.back()->lastError());
+	} else {
+		Toast((ru
+			? QString::fromUtf8("Плагин перезагружен: ")
+			: u"Plugin reloaded: "_q) + name);
+	}
+}
+
 void Host::stop() {
 	SetSink(nullptr);
+	_devTimer.cancel();
+	_devStamps.clear();
 	for (const auto &plugin : _plugins) {
 		plugin->stop();
 	}

@@ -18,6 +18,9 @@ menus, settings), [`examples/plugins/weather`](../examples/plugins/weather)
 
 Pack a folder with `python tools/flua_pack.py <folder>`: it checks the
 manifest and writes `<id>.flua`. The code check below runs in the client.
+An unpacked plugin folder in `plugins/` is a development folder: when a file
+in it is saved, added or removed the client reloads the plugin within a second
+and shows a toast with the result or the error, no restart needed.
 Types for the editor (lua-language-server) are in
 [`docs/sdk/fuckgram.lua`](sdk/fuckgram.lua): add `docs/sdk` to
 `workspace.library` for completion and checks of the whole API.

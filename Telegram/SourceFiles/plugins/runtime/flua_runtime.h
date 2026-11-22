@@ -7,6 +7,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #pragma once
 
 #include "base/flat_set.h"
+#include "base/timer.h"
 #include "base/weak_ptr.h"
 #include "plugins/plugins_hooks.h"
 
@@ -84,6 +85,11 @@ private:
 	void loadDisabled();
 	void saveDisabled();
 
+	// Development folders reload themselves when their files change.
+	void watchDevFolders();
+	void checkDevFolders();
+	void reload(const QString &origin);
+
 	static constexpr auto kMaxWatched = size_t(4096);
 
 	std::vector<std::unique_ptr<Plugin>> _plugins;
@@ -92,6 +98,8 @@ private:
 	base::flat_map<mtpRequestId, mtpTypeId> _own;
 	std::vector<Invalid> _invalid;
 	base::flat_set<QString> _disabled;
+	base::Timer _devTimer;
+	std::map<QString, QString> _devStamps; // folder -> files and times
 
 };
 
