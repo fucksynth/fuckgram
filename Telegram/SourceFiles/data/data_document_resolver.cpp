@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "data/data_document_resolver.h"
+#include "plugins/plugins_hooks.h"
 
 #include "base/platform/base_platform_info.h"
 #include "boxes/abstract_box.h" // Ui::show().
@@ -291,6 +292,14 @@ void ResolveDocument(
 		if (document->isAudioFile()
 			|| document->isVoiceMessage()
 			|| document->isVideoMessage()) {
+			// PLUGIN-HOOK: client_event_play_media
+			if (Plugins::InterceptClientEvent({
+					.event = Plugins::ClientEvent::PlayMedia,
+					.item = item,
+					.peer = item ? item->history()->peer.get() : nullptr,
+				})) {
+				return;
+			}
 			::Media::Player::instance()->playPause(
 				{ document, msgId },
 				::Media::Player::PlaylistContext{
@@ -319,6 +328,16 @@ void ResolveDocument(
 			return;
 		}
 		const auto path = document->filepath(true);
+		// PLUGIN-HOOK: client_event_open_file
+		if (!path.isEmpty()
+			&& Plugins::InterceptClientEvent({
+				.event = Plugins::ClientEvent::OpenFile,
+				.item = item,
+				.peer = item ? item->history()->peer.get() : nullptr,
+				.path = path,
+			})) {
+			return;
+		}
 		if (!path.isEmpty()) {
 			auto context = QVariant();
 			if (item) {

@@ -27,3 +27,14 @@ display_chat_subtitle       # HistoryView::TopBarWidget::updateOnlineDisplay
 main_menu                   # Window::MainMenu::setupMenu (after Settings)
 compose_field_history       # HistoryWidget constructor: register the input field
 compose_field_section       # HistoryView::ComposeControls::initField
+client_event_player_next         # Media::Player::Instance::next
+client_event_player_previous     # Media::Player::Instance::previous
+client_event_player_stop         # Media::Player::Instance::stopAndClose
+client_event_play_media          # Data::ResolveDocument: audio / voice / round video
+client_event_open_file           # Data::ResolveDocument: open a downloaded file (.flua too)
+client_event_select_message      # HistoryView::ListWidget::changeSelection
+client_event_message_menu_history  # HistoryInner::showContextMenu
+client_event_message_menu_section  # HistoryView::ListWidget::showContextMenu
+client_event_avatar_click        # HistoryView::TopBarWidget::infoClicked
+copy_text_history                # HistoryInner::copyContextText
+copy_text_section                # HistoryView "Copy text" context menu action

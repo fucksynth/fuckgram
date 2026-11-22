@@ -2864,6 +2864,21 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		}
 	}
 
+	// PLUGIN-HOOK: client_event_message_menu_history
+	if (const auto menuItem = _dragStateItem
+			? _dragStateItem
+			: Element::Moused()
+			? Element::Moused()->data().get()
+			: nullptr) {
+		if (Plugins::InterceptClientEvent({
+				.event = Plugins::ClientEvent::MessageMenu,
+				.item = menuItem,
+				.peer = menuItem->history()->peer,
+			})) {
+			return;
+		}
+	}
+
 	const auto link = ClickHandler::getActive();
 	if (_controller->showFrozenError()) {
 		return;
@@ -4182,6 +4197,19 @@ void HistoryInner::saveContextGif(FullMsgId itemId) {
 void HistoryInner::copyContextText(FullMsgId itemId) {
 	if (const auto item = session().data().message(itemId)) {
 		if (!showCopyRestriction(item)) {
+			// PLUGIN-HOOK: copy_text_history
+			if (Plugins::Has(Plugins::Hook::DisplayText)) {
+				const auto original = HistoryItemText(item);
+				if (auto replaced = Plugins::DisplayText(
+						Plugins::DisplayTextPlace::CopiedText,
+						item->history()->peer,
+						item,
+						original.expanded)) {
+					TextUtilities::SetClipboardText(
+						TextForMimeData::Simple(std::move(*replaced)));
+					return;
+				}
+			}
 			if (const auto group = session().data().groups().find(item)) {
 				TextUtilities::SetClipboardText(HistoryGroupText(group));
 			} else {

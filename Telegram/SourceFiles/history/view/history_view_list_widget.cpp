@@ -109,6 +109,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/features/filters/filters_cache_controller.h"
 #include "ayu/utils/telegram_helpers.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace HistoryView {
@@ -1852,7 +1853,13 @@ void ListWidget::changeSelection(
 	}
 	if (action == SelectAction::Select) {
 		auto already = int(applyTo.size());
-		if (isGoodForSelection(applyTo, item, already)) {
+		// PLUGIN-HOOK: client_event_select_message
+		if (isGoodForSelection(applyTo, item, already)
+			&& !Plugins::InterceptClientEvent({
+				.event = Plugins::ClientEvent::SelectMessage,
+				.item = item,
+				.peer = item->history()->peer,
+			})) {
 			addToSelection(applyTo, item);
 		}
 	} else {
@@ -4045,6 +4052,19 @@ void ListWidget::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		_overItemExact = _accessibilityFocusedItem;
 		if (const auto view = viewForItem(_accessibilityFocusedItem)) {
 			_overElement = view;
+		}
+	}
+
+	// PLUGIN-HOOK: client_event_message_menu_section
+	if (const auto menuItem = _overElement
+			? _overElement->data().get()
+			: nullptr) {
+		if (Plugins::InterceptClientEvent({
+				.event = Plugins::ClientEvent::MessageMenu,
+				.item = menuItem,
+				.peer = menuItem->history()->peer,
+			})) {
+			return;
 		}
 	}
 

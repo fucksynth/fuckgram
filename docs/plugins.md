@@ -64,12 +64,13 @@ Everything between the client and the runtime goes through
 | | `app_state`, `app_stop` | started, window active / inactive, stopping |
 | | `screen_chat`, `screen_profile` | chat list, chat or profile shown |
 | Links | `open_url`, `open_local_url` | handle external and `tg://` links |
-| Actions | `client_event_*` | cancel reply, reaction, outgoing call, transcription, notification |
+| Actions | `client_event_*` | cancel reply, reaction, outgoing call, transcription, notification, music player next / previous / close, playing a voice or round message, opening a file (this is how `.flua` packages sent in a chat get installed), selecting a message, opening the message menu, clicking the chat header |
 | Menus | `peer_menu_*` | items in the chat and profile menus |
 | | `message_menu_*` | items in the message context menu |
 | | `main_menu` | items in the main (drawer) menu |
 | Input | `compose_field_*` | read and replace the text being typed |
 | Display | `display_*` | replace shown text: message, chat list name, chat title and status |
+| | `copy_text_*` | replace the text that "Copy text" puts to the clipboard |
 
 After a plugin changes its display rules the runtime calls
 `Plugins::RefreshDisplayText()`: messages of loaded chats are re-laid out

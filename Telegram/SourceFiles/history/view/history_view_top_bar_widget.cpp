@@ -891,7 +891,17 @@ void TopBarWidget::infoClicked() {
 	const auto key = _activeChat.key;
 	if (!key) {
 		return;
-	} else if (const auto topic = key.topic()) {
+	}
+	// PLUGIN-HOOK: client_event_avatar_click
+	if (const auto peer = key.peer()) {
+		if (Plugins::InterceptClientEvent({
+				.event = Plugins::ClientEvent::AvatarClick,
+				.peer = peer,
+			})) {
+			return;
+		}
+	}
+	if (const auto topic = key.topic()) {
 		_controller->showSection(std::make_shared<Info::Memento>(topic));
 	} else if (const auto sublist = key.sublist()) {
 		_controller->showSection(std::make_shared<Info::Memento>(sublist));

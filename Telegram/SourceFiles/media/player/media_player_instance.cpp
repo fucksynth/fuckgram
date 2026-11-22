@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "media/player/media_player_instance.h"
+#include "plugins/plugins_hooks.h"
 
 #include "data/data_document.h"
 #include "data/data_session.h"
@@ -1153,6 +1154,13 @@ void Instance::resumeOnCall(AudioMsgId::Type type) {
 }
 
 bool Instance::next(AudioMsgId::Type type) {
+	// PLUGIN-HOOK: client_event_player_next
+	if (type == AudioMsgId::Type::Song
+		&& Plugins::InterceptClientEvent({
+			.event = Plugins::ClientEvent::PlayerNext,
+		})) {
+		return false;
+	}
 	if (const auto data = getData(type)) {
 		return moveInPlaylist(data, 1, false);
 	}
@@ -1160,6 +1168,13 @@ bool Instance::next(AudioMsgId::Type type) {
 }
 
 bool Instance::previous(AudioMsgId::Type type) {
+	// PLUGIN-HOOK: client_event_player_previous
+	if (type == AudioMsgId::Type::Song
+		&& Plugins::InterceptClientEvent({
+			.event = Plugins::ClientEvent::PlayerPrevious,
+		})) {
+		return false;
+	}
 	if (const auto data = getData(type)) {
 		return moveInPlaylist(data, -1, false);
 	}
@@ -1422,6 +1437,12 @@ void Instance::setupShortcuts() {
 }
 
 void Instance::stopAndClose() {
+	// PLUGIN-HOOK: client_event_player_stop
+	if (Plugins::InterceptClientEvent({
+			.event = Plugins::ClientEvent::PlayerStop,
+		})) {
+		return;
+	}
 	_listenTracker->finalize();
 	_closePlayerRequests.fire({});
 

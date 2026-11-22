@@ -1920,6 +1920,19 @@ void FillContextMenuItems(
 				result->addAction(tr::lng_context_copy_text(tr::now), [=] {
 					if (const auto item = owner->message(itemId)) {
 						if (!list->showCopyRestriction(item)) {
+							// PLUGIN-HOOK: copy_text_section
+							if (Plugins::Has(Plugins::Hook::DisplayText)) {
+								const auto original = HistoryItemText(item);
+								if (auto replaced = Plugins::DisplayText(
+										Plugins::DisplayTextPlace::CopiedText,
+										item->history()->peer,
+										item,
+										original.expanded)) {
+									TextUtilities::SetClipboardText(
+										TextForMimeData::Simple(std::move(*replaced)));
+									return;
+								}
+							}
 							if (asGroup) {
 								if (const auto group = owner->groups().find(item)) {
 									TextUtilities::SetClipboardText(HistoryGroupText(group));

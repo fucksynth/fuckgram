@@ -103,6 +103,14 @@ enum class ClientEvent {
 	Call,         // an outgoing call is about to start
 	Transcribe,   // voice / video message transcription requested
 	Notification, // a notification is about to be shown
+	PlayerNext,     // the music player goes to the next track
+	PlayerPrevious, // the music player goes to the previous track
+	PlayerStop,     // the music player is closed
+	PlayMedia,      // an audio, voice or round video message starts playing
+	OpenFile,       // a downloaded file is opened (also .flua packages)
+	SelectMessage,  // a message gets selected
+	MessageMenu,    // a message context menu is about to open
+	AvatarClick,    // the chat header (avatar / name) is clicked
 };
 
 struct ClientEventArgs {
@@ -114,6 +122,7 @@ struct ClientEventArgs {
 	bool remove = false;      // Reaction: the chosen reaction is toggled off
 	bool video = false;       // Call: a video call
 	bool reaction = false;    // Notification: about a reaction, not a message
+	QString path;             // OpenFile: local path of the file
 };
 
 enum class DisplayTextPlace {
@@ -121,6 +130,7 @@ enum class DisplayTextPlace {
 	ChatListName, // chat name in the chat list
 	ChatTitle,    // chat name in the chat header
 	ChatSubtitle, // status line in the chat header
+	CopiedText,   // text put to the clipboard by "Copy text"
 };
 
 // Implemented by the plugin runtime.
