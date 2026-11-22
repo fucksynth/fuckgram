@@ -136,6 +136,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/features/message_shot/message_shot.h"
+#include "plugins/plugins_hooks.h"
 #include "base/unixtime.h"
 
 
@@ -4077,6 +4078,16 @@ bool ChatWidget::confirmSendingFiles(
 }
 
 void ChatWidget::replyToMessage(FullReplyTo id) {
+	// PLUGIN-HOOK: client_event_reply_section
+	if (const auto item = _history->owner().message(id.messageId)) {
+		if (Plugins::InterceptClientEvent({
+				.event = Plugins::ClientEvent::Reply,
+				.item = item,
+				.peer = item->history()->peer,
+			})) {
+			return;
+		}
+	}
 	_composeControls->replyToMessage(std::move(id));
 	refreshTopBarActiveChat();
 }

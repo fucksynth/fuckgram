@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "calls/calls_instance.h"
+#include "plugins/plugins_hooks.h"
 
 #include "calls/calls_call.h"
 #include "calls/group/calls_group_common.h"
@@ -205,6 +206,14 @@ void Instance::startOutgoingCall(
 		StartOutgoingCallArgs args) {
 	if (activateCurrentCall()
 		|| (!args.isConfirmed && activateUnconfirmedCall(user))) {
+		return;
+	}
+	// PLUGIN-HOOK: client_event_call
+	if (Plugins::InterceptClientEvent({
+			.event = Plugins::ClientEvent::Call,
+			.peer = user,
+			.video = args.video,
+		})) {
 		return;
 	}
 	if (user->callsStatus() == UserData::CallsStatus::Private) {

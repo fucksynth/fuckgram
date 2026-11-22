@@ -125,6 +125,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_settings.h"
 #include "ayu/features/forward/ayu_forward.h"
 #include "ayu/ui/context_menu/context_menu.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace HistoryView {
@@ -1415,6 +1416,8 @@ void AddMessageActions(
 		AyuUi::AddUserMessagesAction(menu, request.item);
 		AyuUi::AddRepeatMessageAction(menu, request.item, context);
 		AyuUi::AddMessageDetailsAction(menu, request.item);
+		// PLUGIN-HOOK: message_menu_section
+		Plugins::FillMessageMenu(menu, request.item);
 	}
 
 	AddPostLinkAction(menu, request);

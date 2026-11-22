@@ -41,6 +41,9 @@ int BypassDepth = 0;
 	case Hook::AppState: return "app_state";
 	case Hook::Screen: return "screen";
 	case Hook::PeerMenu: return "peer_menu";
+	case Hook::ClientEvent: return "client_event";
+	case Hook::MessageMenu: return "message_menu";
+	case Hook::DisplayText: return "display_text";
 	case Hook::Count: break;
 	}
 	return "unknown";
@@ -197,6 +200,50 @@ void FillPeerMenu(
 			}
 		},
 	});
+}
+
+bool InterceptClientEvent(ClientEventArgs &&args) {
+	if (!Ready(Hook::ClientEvent)) {
+		return false;
+	}
+	const auto guard = InFlight(Hook::ClientEvent);
+	return CurrentSink->clientEvent(args);
+}
+
+void FillMessageMenu(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
+	if (!item || !Ready(Hook::MessageMenu)) {
+		return;
+	}
+	auto items = std::vector<MenuItem>();
+	{
+		const auto guard = InFlight(Hook::MessageMenu);
+		CurrentSink->messageMenu(item, items);
+	}
+	for (auto &entry : items) {
+		if (entry.text.isEmpty() || !entry.handler) {
+			continue;
+		}
+		menu->addAction(
+			entry.text,
+			std::move(entry.handler),
+			&st::menuIconBotCommands);
+	}
+}
+
+std::optional<QString> DisplayText(
+		DisplayTextPlace place,
+		PeerData *peer,
+		HistoryItem *item,
+		const QString &text) {
+	if (!Ready(Hook::DisplayText)) {
+		return std::nullopt;
+	}
+	const auto guard = InFlight(Hook::DisplayText);
+	auto result = CurrentSink->displayText(place, peer, item, text);
+	if (result && *result == text) {
+		return std::nullopt;
+	}
+	return result;
 }
 
 } // namespace Plugins

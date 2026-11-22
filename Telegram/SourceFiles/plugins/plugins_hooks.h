@@ -10,9 +10,15 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "data/data_msg_id.h"
 #include "ui/text/text_entity.h"
 
+#include <optional>
+
 class History;
 class HistoryItem;
 class PeerData;
+
+namespace Ui {
+class PopupMenu;
+} // namespace Ui
 
 namespace Ui::Menu {
 struct MenuCallback;
@@ -36,6 +42,9 @@ enum class Hook : uint32 {
 	AppState,     // event: started / stopping / active / inactive
 	Screen,       // event: chat list, chat or profile shown
 	PeerMenu,     // ui: items in the chat and profile "..." menus
+	ClientEvent,  // filter: cancel a user action (reply, reaction, call...)
+	MessageMenu,  // ui: items in the message context menu
+	DisplayText,  // filter: replace shown text (message, chat name...)
 
 	Count,
 };
@@ -86,6 +95,32 @@ struct MenuItem {
 	Fn<void()> handler;
 };
 
+enum class ClientEvent {
+	Reply,        // the user starts replying to a message
+	Reaction,     // the user sets or removes a reaction
+	Call,         // an outgoing call is about to start
+	Transcribe,   // voice / video message transcription requested
+	Notification, // a notification is about to be shown
+};
+
+struct ClientEventArgs {
+	ClientEvent event = ClientEvent::Reply;
+	HistoryItem *item = nullptr;
+	PeerData *peer = nullptr;
+	QString emoji;            // Reaction: the emoji, empty for a custom one
+	uint64 customEmojiId = 0; // Reaction: custom emoji document id
+	bool remove = false;      // Reaction: the chosen reaction is toggled off
+	bool video = false;       // Call: a video call
+	bool reaction = false;    // Notification: about a reaction, not a message
+};
+
+enum class DisplayTextPlace {
+	Message,      // message text in a chat (display only, not sent)
+	ChatListName, // chat name in the chat list
+	ChatTitle,    // chat name in the chat header
+	ChatSubtitle, // status line in the chat header
+};
+
 // Implemented by the plugin runtime.
 class Sink {
 public:
@@ -113,6 +148,22 @@ public:
 			PeerMenuPlace,
 			not_null<PeerData*>,
 			std::vector<MenuItem> &) {
+	}
+	// true cancels the action.
+	virtual bool clientEvent(const ClientEventArgs &) {
+		return false;
+	}
+	virtual void messageMenu(
+			not_null<HistoryItem*>,
+			std::vector<MenuItem> &) {
+	}
+	// A value replaces the text that is shown, std::nullopt keeps it.
+	virtual std::optional<QString> displayText(
+			DisplayTextPlace,
+			PeerData*,
+			HistoryItem*,
+			const QString &) {
+		return std::nullopt;
 	}
 };
 
@@ -155,5 +206,19 @@ void FillPeerMenu(
 	PeerMenuPlace place,
 	not_null<PeerData*> peer,
 	const Ui::Menu::MenuCallback &addAction);
+
+// true means a plugin cancelled the action.
+[[nodiscard]] bool InterceptClientEvent(ClientEventArgs &&args);
+
+// Adds the plugin items to a message context menu.
+void FillMessageMenu(not_null<Ui::PopupMenu*> menu, HistoryItem *item);
+
+// Text to show instead of `text`, std::nullopt keeps the original.
+// Applied where the client rebuilds the text, not on every repaint.
+[[nodiscard]] std::optional<QString> DisplayText(
+	DisplayTextPlace place,
+	PeerData *peer,
+	HistoryItem *item,
+	const QString &text);
 
 } // namespace Plugins

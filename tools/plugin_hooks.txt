@@ -12,3 +12,15 @@ screen_chat         # Window::SessionController: active chat changed
 screen_profile      # Window::SessionNavigation::showPeerInfo
 peer_menu_chat      # Window::Filler::fillHistoryActions
 peer_menu_profile   # Window::Filler::fillProfileActions
+client_event_reply          # HistoryWidget::replyToMessage
+client_event_reply_section  # HistoryView::ChatWidget::replyToMessage
+client_event_reaction       # HistoryItem::toggleReaction
+client_event_call           # Calls::Instance::startOutgoingCall
+client_event_transcribe     # HistoryView::TranscribeButton::link
+client_event_notification   # Window::Notifications::System::schedule
+message_menu_history        # HistoryInner::showContextMenu
+message_menu_section        # HistoryView::AddMessageActions
+display_message_text        # HistoryView::Element::setTextWithLinks
+display_chat_list_name      # Dialogs::Entry::chatListNameText
+display_chat_title          # HistoryView::TopBarWidget::paintTopBar
+display_chat_subtitle       # HistoryView::TopBarWidget::updateOnlineDisplay

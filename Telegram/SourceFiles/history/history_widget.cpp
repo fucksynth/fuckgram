@@ -223,6 +223,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/utils/telegram_helpers.h"
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/features/forward/ayu_forward.h"
+#include "plugins/plugins_hooks.h"
 #include "boxes/abstract_box.h"
 
 
@@ -10450,6 +10451,14 @@ void HistoryWidget::replyToMessage(
 		not_null<HistoryItem*> item,
 		FullReplyTo fields) {
 	if (isJoinChannel()) {
+		return;
+	}
+	// PLUGIN-HOOK: client_event_reply
+	if (Plugins::InterceptClientEvent({
+			.event = Plugins::ClientEvent::Reply,
+			.item = item,
+			.peer = item->history()->peer,
+		})) {
 		return;
 	}
 	fields.messageId = item->fullId();

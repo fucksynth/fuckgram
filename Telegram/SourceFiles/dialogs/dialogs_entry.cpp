@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "dialogs/dialogs_entry.h"
+#include "plugins/plugins_hooks.h"
 
 #include "dialogs/dialogs_key.h"
 #include "dialogs/dialogs_indexed_list.h"
@@ -332,9 +333,20 @@ const Ui::Text::String &Entry::chatListNameText() const {
 	const auto version = chatListNameVersion();
 	if (_chatListNameVersion < version) {
 		_chatListNameVersion = version;
+		auto name = chatListName();
+		// PLUGIN-HOOK: display_chat_list_name
+		if (const auto history = asHistory()) {
+			if (auto replaced = Plugins::DisplayText(
+					Plugins::DisplayTextPlace::ChatListName,
+					history->peer,
+					nullptr,
+					name)) {
+				name = std::move(*replaced);
+			}
+		}
 		_chatListNameText.setText(
 			st::semiboldTextStyle,
-			chatListName(),
+			name,
 			Ui::NameTextOptions());
 	}
 	return _chatListNameText;

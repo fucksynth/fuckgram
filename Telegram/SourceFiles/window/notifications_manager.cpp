@@ -57,6 +57,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/utils/telegram_helpers.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace Window {
@@ -444,6 +445,19 @@ void System::registerThread(not_null<Data::Thread*> thread) {
 
 void System::schedule(Data::ItemNotification notification) {
 	Expects(_manager != nullptr);
+
+	// PLUGIN-HOOK: client_event_notification
+	if (Plugins::InterceptClientEvent({
+			.event = Plugins::ClientEvent::Notification,
+			.item = notification.item,
+			.peer = notification.item->history()->peer,
+			.reaction = (notification.type
+				== Data::ItemNotificationType::Reaction),
+		})) {
+		notification.item->notificationThread()->popNotification(
+			notification);
+		return;
+	}
 
 	const auto item = notification.item;
 	const auto type = notification.type;

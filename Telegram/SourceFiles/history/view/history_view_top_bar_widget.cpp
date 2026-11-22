@@ -74,6 +74,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "plugins/plugins_hooks.h"
 #include "boxes/peers/edit_participants_box.h"
 #include "data/data_chat_filters.h"
 #include "history/admin_log/history_admin_log_section.h"
@@ -689,9 +690,18 @@ void TopBarWidget::paintTopBar(Painter &p) {
 	} else if (namePeer) {
 		if (_titleNameVersion < namePeer->nameVersion()) {
 			_titleNameVersion = namePeer->nameVersion();
+			auto titleText = TopBarNameText(namePeer, _activeChat);
+			// PLUGIN-HOOK: display_chat_title
+			if (auto replaced = Plugins::DisplayText(
+					Plugins::DisplayTextPlace::ChatTitle,
+					namePeer,
+					nullptr,
+					titleText)) {
+				titleText = std::move(*replaced);
+			}
 			_title.setText(
 				st::msgNameStyle,
-				TopBarNameText(namePeer, _activeChat),
+				titleText,
 				Ui::NameTextOptions());
 		}
 		if (const auto info = namePeer->botVerifyDetails()) {
@@ -2096,6 +2106,14 @@ void TopBarWidget::updateOnlineDisplay() {
 		} else {
 			text = channel->isMegagroup() ? tr::lng_group_status(tr::now) : tr::lng_channel_status(tr::now);
 		}
+	}
+	// PLUGIN-HOOK: display_chat_subtitle
+	if (auto replaced = Plugins::DisplayText(
+			Plugins::DisplayTextPlace::ChatSubtitle,
+			peer,
+			nullptr,
+			text)) {
+		text = std::move(*replaced);
 	}
 	if (_titlePeerText.toString() != text) {
 		_titlePeerText.setText(st::dialogsTextStyle, text);

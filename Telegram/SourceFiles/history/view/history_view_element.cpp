@@ -78,6 +78,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_settings.h"
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/utils/telegram_helpers.h"
+#include "plugins/plugins_hooks.h"
 #include "styles/style_ayu_styles.h"
 
 
@@ -2316,7 +2317,22 @@ void Element::setTextWithLinks(
 		const auto item = data();
 		const auto &options = Ui::ItemTextOptions(item);
 		clearSpecialOnlyEmoji();
-		_text.setMarkedText(st::messageTextStyle, text, options, context);
+		// PLUGIN-HOOK: display_message_text
+		auto shown = std::optional<TextWithEntities>();
+		if (Plugins::Has(Plugins::Hook::DisplayText)) {
+			if (auto replaced = Plugins::DisplayText(
+					Plugins::DisplayTextPlace::Message,
+					item->history()->peer,
+					item,
+					text.text)) {
+				shown = TextWithEntities{ std::move(*replaced) };
+			}
+		}
+		_text.setMarkedText(
+			st::messageTextStyle,
+			shown ? *shown : text,
+			options,
+			context);
 		if (!item->_text.empty() && _text.isEmpty()){
 			// If server has allowed some text that we've trim-ed entirely,
 			// just replace it with something so that UI won't look buggy.

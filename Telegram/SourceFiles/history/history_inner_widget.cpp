@@ -142,6 +142,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ui/context_menu/context_menu.h"
 #include "ayu/ui/settings/filters/edit_filter.h"
 #include "ayu/utils/telegram_helpers.h"
+#include "plugins/plugins_hooks.h"
 #include "data/data_document_media.h"
 
 
@@ -3151,6 +3152,8 @@ void HistoryInner::showContextMenu(QContextMenuEvent *e, bool showFromTouch) {
 		AyuUi::AddUserMessagesAction(_menu, item);
 		AyuUi::AddRepeatMessageAction(_menu, item, HistoryView::Context::History);
 		AyuUi::AddMessageDetailsAction(_menu, item);
+		// PLUGIN-HOOK: message_menu_history
+		Plugins::FillMessageMenu(_menu, item);
 	};
 	const auto addPhotoActions = [&](not_null<PhotoData*> photo, HistoryItem *item) {
 		const auto media = photo->activeMediaView();

@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "history/view/history_view_transcribe_button.h"
+#include "plugins/plugins_hooks.h"
 
 #include "base/unixtime.h"
 #include "boxes/premium_preview_box.h"
@@ -376,6 +377,14 @@ ClickHandlerPtr TranscribeButton::link() {
 	_link = std::make_shared<LambdaClickHandler>([=](ClickContext context) {
 		const auto item = session->data().message(id);
 		if (!item) {
+			return;
+		}
+		// PLUGIN-HOOK: client_event_transcribe
+		if (Plugins::InterceptClientEvent({
+				.event = Plugins::ClientEvent::Transcribe,
+				.item = item,
+				.peer = item->history()->peer,
+			})) {
 			return;
 		}
 		if (session->premium()) {

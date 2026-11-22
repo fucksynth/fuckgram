@@ -87,6 +87,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/features/filters/filters_controller.h"
 #include "ayu/features/message_shot/message_shot.h"
 #include "ayu/utils/telegram_helpers.h"
+#include "plugins/plugins_hooks.h"
 #include "ui/emoji_config.h"
 
 
@@ -3683,6 +3684,19 @@ void HistoryItem::toggleReaction(
 		HistoryReactionSource source) {
 	Expects(!reaction.paid());
 
+	// PLUGIN-HOOK: client_event_reaction
+	if (Plugins::Has(Plugins::Hook::ClientEvent)
+		&& Plugins::InterceptClientEvent({
+			.event = Plugins::ClientEvent::Reaction,
+			.item = this,
+			.peer = history()->peer,
+			.emoji = reaction.emoji(),
+			.customEmojiId = reaction.custom(),
+			.remove = (_reactions
+				&& ranges::contains(_reactions->chosen(), reaction)),
+		})) {
+		return;
+	}
 	const auto addToRecent = (source == HistoryReactionSource::Selector);
 	if (_reactions
 		&& ranges::contains(_reactions->chosen(), reaction)) {
