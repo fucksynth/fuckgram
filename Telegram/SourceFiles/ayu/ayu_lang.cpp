@@ -206,6 +206,19 @@ void AyuLanguage::applyLanguageJson(QJsonDocument doc) {
 			val = val.replace(qsl("%1$s"), qsl("{item1}")).replace(qsl("%2$s"), qsl("{item2}"));
 		}
 
+		// fuckgram: keep our own base wording for these keys.
+		if (key == qsl("ayu_SettingsWatermark")
+			|| key == qsl("ayu_PluginsNotAvailable")
+			|| key == qsl("ayu_ExteraChatsAlert")) {
+			continue;
+		}
+		// fuckgram: rebrand translated strings, except the ones that
+		// describe the AyuGram / exteraGram projects themselves.
+		if (key != qsl("ayu_SupporterPopup")
+			&& key != qsl("ayu_OfficialResourcePopup")) {
+			val.replace(qsl("AyuGram"), qsl("fuckgram"));
+		}
+
 		Lang::GetInstance().resetValue(key.toUtf8());
 		Lang::GetInstance().applyValue(key.toUtf8(), val.toUtf8());
 	}

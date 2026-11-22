@@ -45,18 +45,18 @@ rpl::producer<TextWithEntities> Text() {
 		lt_gpl_link,
 		rpl::single(Ui::Text::Link(
 			"GNU GPL",
-			"https://github.com/AyuGram/AyuGramDesktop/blob/dev/LICENSE")),
+			"https://github.com/fucksynth/fuckgram/blob/main/LICENSE")),
 		lt_github_link,
 		rpl::single(Ui::Text::Link(
 			"GitHub",
-			"https://github.com/AyuGram/AyuGramDesktop")),
+			"https://github.com/fucksynth/fuckgram")),
 		tr::marked);
 }
 
 } // namespace
 
 void AboutBox(not_null<Ui::GenericBox*> box, Window::SessionController* controller) {
-	box->setTitle(rpl::single(u"AyuGram Desktop"_q));
+	box->setTitle(rpl::single(u"fuckgram"_q));
 
 	auto layout = box->verticalLayout();
 
@@ -90,15 +90,8 @@ void AboutBox(not_null<Ui::GenericBox*> box, Window::SessionController* controll
 	addText(Text());
 
 	box->addButton(tr::lng_close(), [=] { box->closeBox(); });
-	box->addLeftButton(
-		rpl::single(QString("@AyuGramReleases")),
-		[box, controller]
-		{
-			box->closeBox();
-			controller->showPeerByLink(Window::PeerByLinkInfo{
-				.usernameOrId = QString("ayugramreleases"),
-			});
-		});
+	// fuckgram: no "@AyuGramReleases" button, the channel is not ours.
+	(void)controller;
 
 	box->setWidth(st::aboutWidth);
 }
