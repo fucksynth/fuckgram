@@ -314,6 +314,11 @@ Value Analyzer::child(
 		return {};
 	}
 	use(entry->permission);
+	if (entry->type != ApiType::Table && !Special(path)) {
+		// Functions and fields need nothing more once their permission is
+		// counted: `plugin.name:upper()` or `tg.log or print` are fine.
+		return {};
+	}
 	return { Kind::Api, path };
 }
 
@@ -403,6 +408,11 @@ void Analyzer::analyze(const Proto *p, std::vector<Value> upvalues) {
 		return;
 	}
 	const auto count = std::max(int(p->maxstacksize), 1);
+	// A state per instruction: refuse what would take too much memory.
+	if (int64(size) * count > 2'000'000) {
+		fail(p, 0, u"the code is too complex to check"_q);
+		return;
+	}
 	const auto up = [&](int index) -> Value {
 		return (index >= 0 && index < int(upvalues.size()))
 			? upvalues[index]
@@ -458,6 +468,34 @@ void Analyzer::analyze(const Proto *p, std::vector<Value> upvalues) {
 				|| (value.kind == Kind::Mixed)
 				|| (value.kind == Kind::Env);
 		};
+		// After 256 constants a key is loaded into a register by LOADK.
+		const auto keyIn = [&](int index) -> std::optional<std::string> {
+			const auto value = reg(index);
+			return (value.kind == Kind::String)
+				? std::make_optional(value.text)
+				: std::nullopt;
+		};
+		const auto store = [&](
+				const Value &target,
+				const std::optional<std::string> &key) {
+			if (target.kind == Kind::Env
+				|| (target.kind == Kind::Api && target.text == "_G")) {
+				if (!key) {
+					fail(p, pc, u"globals can be set only by a constant name"_q);
+				} else if (*key == "tg"
+					|| *key == "plugin"
+					|| *key == "require"
+					|| *key == "_G"
+					|| *key == "_ENV"
+					|| *key == "print") {
+					fail(p, pc, u"'"_q
+						+ QString::fromStdString(*key)
+						+ u"' can't be replaced"_q);
+				}
+			} else if (api(target)) {
+				fail(p, pc, u"API objects can't be changed"_q);
+			}
+		};
 
 		const auto i = p->code[pc];
 		const auto op = GET_OPCODE(i);
@@ -501,6 +539,8 @@ void Analyzer::analyze(const Proto *p, std::vector<Value> upvalues) {
 				pc));
 			break;
 		case OP_GETTABLE:
+			set(a, child(reg(GETARG_B(i)), keyIn(GETARG_C(i)), p, pc));
+			break;
 		case OP_GETI:
 			if (api(reg(GETARG_B(i)))) {
 				fail(p, pc, u"API objects can be indexed only by a "
@@ -511,50 +551,36 @@ void Analyzer::analyze(const Proto *p, std::vector<Value> upvalues) {
 		case OP_SELF: {
 			const auto base = reg(GETARG_B(i));
 			auto method = Value();
-			if (GETARG_k(i)) {
-				method = child(base, ConstString(p, GETARG_C(i)), p, pc);
-			} else if (api(base)) {
-				fail(p, pc, u"API objects can be indexed only by a "
-					"constant name"_q);
-			}
+			method = child(
+				base,
+				GETARG_k(i)
+					? ConstString(p, GETARG_C(i))
+					: keyIn(GETARG_C(i)),
+				p,
+				pc);
 			set(a + 1, base);
 			set(a, method);
 		} break;
-		case OP_SETTABUP: {
-			const auto target = up(a);
-			const auto key = ConstString(p, GETARG_B(i));
-			if (target.kind == Kind::Env
-				&& key
-				&& (*key == "tg"
-					|| *key == "plugin"
-					|| *key == "require"
-					|| *key == "_G"
-					|| *key == "_ENV"
-					|| *key == "print")) {
-				fail(p, pc, u"'"_q
-					+ QString::fromStdString(*key)
-					+ u"' can't be replaced"_q);
-			} else if (target.kind == Kind::Api
-				|| target.kind == Kind::Mixed) {
-				fail(p, pc, u"API objects can't be changed"_q);
-			}
+		case OP_SETTABUP:
+			store(up(a), ConstString(p, GETARG_B(i)));
 			if (!GETARG_k(i)) {
 				escape(reg(GETARG_C(i)), p, pc);
 			}
-		} break;
+			break;
 		case OP_SETFIELD:
-		case OP_SETI:
-			if (api(reg(a))) {
-				fail(p, pc, u"API objects can't be changed"_q);
+			store(reg(a), ConstString(p, GETARG_B(i)));
+			if (!GETARG_k(i)) {
+				escape(reg(GETARG_C(i)), p, pc);
 			}
+			break;
+		case OP_SETI:
+			store(reg(a), std::nullopt);
 			if (!GETARG_k(i)) {
 				escape(reg(GETARG_C(i)), p, pc);
 			}
 			break;
 		case OP_SETTABLE:
-			if (api(reg(a))) {
-				fail(p, pc, u"API objects can't be changed"_q);
-			}
+			store(reg(a), keyIn(GETARG_B(i)));
 			escape(reg(GETARG_B(i)), p, pc);
 			if (!GETARG_k(i)) {
 				escape(reg(GETARG_C(i)), p, pc);
@@ -637,10 +663,14 @@ void Analyzer::analyze(const Proto *p, std::vector<Value> upvalues) {
 			}
 			set(a, Value());
 		} break;
-		case OP_TESTSET:
+		case OP_TESTSET: {
+			// The skip path (pc + 2) leaves R[A] as it was, the next
+			// instruction (a jump) sees R[A] = R[B].
+			auto skip = state;
+			skip.multiBase = -1;
+			flow(pc + 2, skip);
 			set(a, reg(GETARG_B(i)));
-			successors = { pc + 1, pc + 2 };
-			break;
+		} break;
 		case OP_EQ:
 		case OP_LT:
 		case OP_LE:
@@ -679,7 +709,10 @@ void Analyzer::analyze(const Proto *p, std::vector<Value> upvalues) {
 			// (`for k, v in next, tg`) lets it be walked dynamically.
 			escape(reg(a + 1), p, pc);
 			escape(reg(a + 2), p, pc);
-			if (reg(a).kind == Kind::Mixed) {
+			if (const auto callee = reg(a); callee.kind == Kind::Mixed
+				|| callee.kind == Kind::Env
+				|| (callee.kind == Kind::Api
+					&& (Special(callee.text) || callee.text == "_G"))) {
 				fail(p, pc, u"can't tell which function is called here"_q);
 			}
 			clear(a + 4, a + 3 + GETARG_C(i));

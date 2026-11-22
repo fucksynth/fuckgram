@@ -83,6 +83,7 @@ void ParseManifest(Package &package) {
 		package.error = u"name is missing"_q;
 		return;
 	} else if (!GoodPath(manifest.entry)
+		|| !manifest.entry.endsWith(u".lua"_q)
 		|| !package.files.contains(manifest.entry)) {
 		package.error = u"entry file is missing: "_q + manifest.entry;
 		return;
@@ -137,6 +138,9 @@ void ParseManifest(Package &package) {
 		return false;
 	} else if (int(package.files.size()) >= kMaxFiles) {
 		package.error = u"too many files"_q;
+		return false;
+	} else if (package.files.contains(path)) {
+		package.error = u"duplicate file: "_q + path;
 		return false;
 	}
 	total += content.size();
@@ -237,13 +241,17 @@ Package ReadPackageFile(const QString &path) {
 	auto total = 0;
 	while (true) {
 		const auto name = zip.getCurrentFileName();
-		if (name.isEmpty()) {
+		if (name.isEmpty() || name.toUtf8().size() >= 128) {
+			// getCurrentFileName() cuts names at 128 bytes.
 			result.error = u"broken archive entry"_q;
 			return result;
 		}
 		if (!name.endsWith(u'/')) {
+			auto info = unz_file_info();
+			zip.getCurrentFileInfo(&info, nullptr, 0, nullptr, 0, nullptr, 0);
 			auto content = zip.readCurrentFileContent(kMaxFileSize);
-			if (zip.error() != UNZ_OK) {
+			if (zip.error() != UNZ_OK
+				|| content.size() != int(info.uncompressed_size)) {
 				result.error = u"could not unpack: "_q + name;
 				return result;
 			} else if (!AddFile(result, name, std::move(content), total)) {
