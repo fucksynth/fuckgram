@@ -69,12 +69,22 @@ Everything between the client and the runtime goes through
 | | `message_menu_*` | items in the message context menu |
 | | `main_menu` | items in the main (drawer) menu |
 | Input | `compose_field_*` | read and replace the text being typed |
+| Server | `incoming_update` | drop an incoming update (typing, statuses, messages...) before the client applies it |
+| Profile | `profile_rows` | add rows to the profile info block |
+| Settings | `settings_plugins` | the "Plugins" entry that opens the runtime's manager |
 | Display | `display_*` | replace shown text: message, chat list name, chat title and status |
 | | `copy_text_*` | replace the text that "Copy text" puts to the clipboard |
 
 After a plugin changes its display rules the runtime calls
 `Plugins::RefreshDisplayText()`: messages of loaded chats are re-laid out
 at once, chat names and headers on their next repaint.
+
+## Events without hooks
+
+The runtime lives in the client process, so for plain notifications it can
+subscribe to the client's own event streams (for example `Data::Session`
+item added / removed / edited) without new hooks. Hooks are added only where
+a plugin must cancel, change or add something.
 
 ## Adding a hook
 

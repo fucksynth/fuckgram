@@ -76,6 +76,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "ayu/ayu_worker.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace Api {
@@ -1615,6 +1616,11 @@ void Updates::applyUpdates(
 }
 
 void Updates::feedUpdate(const MTPUpdate &update) {
+	// PLUGIN-HOOK: incoming_update
+	if (Plugins::Has(Plugins::Hook::Update)
+		&& Plugins::FilterUpdate(_session, update)) {
+		return;
+	}
 	switch (update.type()) {
 
 	// New messages.

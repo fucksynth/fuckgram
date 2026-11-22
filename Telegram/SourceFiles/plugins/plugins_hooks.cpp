@@ -90,6 +90,8 @@ struct ComposeEntry {
 	case Hook::MessageMenu: return "message_menu";
 	case Hook::DisplayText: return "display_text";
 	case Hook::MainMenu: return "main_menu";
+	case Hook::Update: return "update";
+	case Hook::ProfileRows: return "profile_rows";
 	case Hook::Count: break;
 	}
 	return "unknown";
@@ -359,6 +361,41 @@ bool SetComposeText(const TextWithTags &text) {
 		return true;
 	}
 	return false;
+}
+
+bool FilterUpdate(
+		not_null<Main::Session*> session,
+		const MTPUpdate &update) {
+	if (!Ready(Hook::Update)) {
+		return false;
+	}
+	const auto guard = InFlight(Hook::Update);
+	return CurrentSink->update(session, update);
+}
+
+std::vector<ProfileRow> ProfileRows(not_null<PeerData*> peer) {
+	if (!Ready(Hook::ProfileRows)) {
+		return {};
+	}
+	auto rows = std::vector<ProfileRow>();
+	{
+		const auto guard = InFlight(Hook::ProfileRows);
+		CurrentSink->profileRows(peer, rows);
+	}
+	std::erase_if(rows, [](const ProfileRow &row) {
+		return row.label.isEmpty() || row.value.isEmpty();
+	});
+	return rows;
+}
+
+bool HasPluginManager() {
+	return CurrentSink && CurrentSink->hasPluginManager();
+}
+
+void OpenPluginManager(Window::SessionController *controller) {
+	if (HasPluginManager()) {
+		CurrentSink->openPluginManager(controller);
+	}
 }
 
 } // namespace Plugins

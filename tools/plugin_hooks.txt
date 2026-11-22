@@ -38,3 +38,6 @@ client_event_message_menu_section  # HistoryView::ListWidget::showContextMenu
 client_event_avatar_click        # HistoryView::TopBarWidget::infoClicked
 copy_text_history                # HistoryInner::copyContextText
 copy_text_section                # HistoryView "Copy text" context menu action
+incoming_update                  # Api::Updates::feedUpdate: drop an update
+settings_plugins                 # Settings main section: "Plugins" entry (manager UI)
+profile_rows                     # Info::Profile::DetailsFiller::makeInfo: extra rows

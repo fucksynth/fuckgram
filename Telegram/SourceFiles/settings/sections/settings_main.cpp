@@ -94,6 +94,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ui/settings/settings_main.h"
 #include "ayu/ui/utils/ayu_profile_values.h"
 #include "ayu/utils/telegram_helpers.h"
+#include "plugins/plugins_hooks.h"
 
 
 namespace Settings {
@@ -396,6 +397,16 @@ void BuildSectionButtons(SectionBuilder &builder) {
 		.icon = { &st::menuIconPremium },
 		.keywords = { u"ayu"_q },
 	});
+	// PLUGIN-HOOK: settings_plugins
+	if (Plugins::HasPluginManager()) {
+		builder.addButton({
+			.id = u"main/plugins"_q,
+			.title = tr::fg_plugins(),
+			.icon = { &st::menuIconBotCommands },
+			.onClick = [=] { Plugins::OpenPluginManager(controller); },
+			.keywords = { u"plugins"_q, u"lua"_q, u"flua"_q },
+		});
+	}
 	builder.addSkip();
 	builder.addDivider();
 	builder.addSkip();

@@ -17,6 +17,14 @@ class HistoryItem;
 class PeerData;
 class QWidget;
 
+namespace Main {
+class Session;
+} // namespace Main
+
+namespace Window {
+class SessionController;
+} // namespace Window
+
 namespace Ui {
 class PopupMenu;
 } // namespace Ui
@@ -47,6 +55,8 @@ enum class Hook : uint32 {
 	MessageMenu,  // ui: items in the message context menu
 	DisplayText,  // filter: replace shown text (message, chat name...)
 	MainMenu,     // ui: items in the main (drawer) menu
+	Update,       // filter: drop an incoming update from the server
+	ProfileRows,  // ui: extra rows in the profile info block
 
 	Count,
 };
@@ -125,6 +135,11 @@ struct ClientEventArgs {
 	QString path;             // OpenFile: local path of the file
 };
 
+struct ProfileRow {
+	QString label;
+	QString value; // also what "Copy" in the row's context menu copies
+};
+
 enum class DisplayTextPlace {
 	Message,      // message text in a chat (display only, not sent)
 	ChatListName, // chat name in the chat list
@@ -178,6 +193,21 @@ public:
 		return std::nullopt;
 	}
 	virtual void mainMenu(std::vector<MenuItem> &) {
+	}
+	// true drops the update: it is not applied by the client. Its pts
+	// is already counted, so the update state stays consistent.
+	virtual bool update(not_null<Main::Session*>, const MTPUpdate &) {
+		return false;
+	}
+	virtual void profileRows(
+			not_null<PeerData*>,
+			std::vector<ProfileRow> &) {
+	}
+	// The runtime's own UI: list of plugins, install, settings.
+	virtual bool hasPluginManager() {
+		return false;
+	}
+	virtual void openPluginManager(Window::SessionController*) {
 	}
 };
 
@@ -255,5 +285,17 @@ void RegisterComposeField(
 	Fn<void(const TextWithTags&)> set);
 [[nodiscard]] std::optional<TextWithTags> ComposeText();
 bool SetComposeText(const TextWithTags &text);
+
+// true means a plugin dropped the update.
+[[nodiscard]] bool FilterUpdate(
+	not_null<Main::Session*> session,
+	const MTPUpdate &update);
+
+[[nodiscard]] std::vector<ProfileRow> ProfileRows(not_null<PeerData*> peer);
+
+// The "Plugins" entry in Settings is shown only with a runtime that has
+// its own manager UI.
+[[nodiscard]] bool HasPluginManager();
+void OpenPluginManager(Window::SessionController *controller);
 
 } // namespace Plugins
