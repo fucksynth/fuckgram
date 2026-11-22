@@ -13,8 +13,10 @@ root. Put it into `plugins/` next to `tdata` (portable) or in the fuckgram data
 folder, then restart. Settings → Plugins lists what is loaded and the last
 error of each plugin. Examples: [`examples/plugins/hello`](../examples/plugins/hello) (send filter,
 menus, settings), [`examples/plugins/weather`](../examples/plugins/weather)
-(`tg.async` + HTTP) and [`examples/plugins/raw`](../examples/plugins/raw)
-(`tg.invoke`, MTProto filters).
+(`tg.async` + HTTP), [`examples/plugins/raw`](../examples/plugins/raw)
+(`tg.invoke`, MTProto filters) and
+[`examples/plugins/selftest`](../examples/plugins/selftest) (a manual test of
+the whole API: type `/t` in any chat).
 
 Pack a folder with `python tools/flua_pack.py <folder>`: it checks the
 manifest and writes `<id>.flua`. The code check below runs in the client.
