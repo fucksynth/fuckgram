@@ -89,6 +89,7 @@ private:
 	void watchDevFolders();
 	void checkDevFolders();
 	void reload(const QString &origin);
+	void unload(const QString &origin);
 
 	static constexpr auto kMaxWatched = size_t(4096);
 

@@ -276,6 +276,9 @@ Package ReadPackageFolder(const QString &path) {
 	while (it.hasNext()) {
 		const auto full = it.next();
 		const auto relative = root.relativeFilePath(full);
+		if (relative.startsWith(u'.') || relative.contains(u"/."_q)) {
+			continue; // .git, editor settings: not part of the plugin
+		}
 		auto file = QFile(full);
 		if (file.size() > kMaxFileSize || !file.open(QIODevice::ReadOnly)) {
 			result.error = u"could not read: "_q + relative;

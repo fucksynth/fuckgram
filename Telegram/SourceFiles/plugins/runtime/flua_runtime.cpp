@@ -209,12 +209,17 @@ namespace {
 [[nodiscard]] QString FolderStamp(const QString &folder) {
 	auto count = 0;
 	auto newest = qint64(0);
+	const auto root = QDir(folder);
+	// The same files ReadPackageFolder() reads.
 	auto it = QDirIterator(
 		folder,
-		QDir::Files | QDir::NoDotAndDotDot,
+		QDir::Files | QDir::NoSymLinks | QDir::Hidden,
 		QDirIterator::Subdirectories);
 	while (it.hasNext()) {
-		it.next();
+		const auto relative = root.relativeFilePath(it.next());
+		if (relative.startsWith(u'.') || relative.contains(u"/."_q)) {
+			continue;
+		}
 		++count;
 		newest = std::max(
 			newest,
@@ -289,19 +294,34 @@ void Host::watchDevFolders() {
 		const auto path = entry.absoluteFilePath();
 		_devStamps.emplace(path, FolderStamp(path));
 	}
-	if (_devStamps.empty()) {
-		_devTimer.cancel();
-	} else {
-		_devTimer.callEach(1000);
-	}
+	// Also notices folders added or removed later.
+	_devTimer.callEach(1000);
 }
 
 void Host::checkDevFolders() {
+	auto current = base::flat_set<QString>();
+	const auto entries = QDir(PluginsPath()).entryInfoList(
+		QDir::Dirs | QDir::NoDotAndDotDot);
+	for (const auto &entry : entries) {
+		current.emplace(entry.absoluteFilePath());
+	}
+	for (auto i = begin(_devStamps); i != end(_devStamps);) {
+		if (current.contains(i->first)) {
+			++i;
+		} else {
+			unload(i->first);
+			i = _devStamps.erase(i);
+		}
+	}
 	auto changed = std::vector<QString>();
-	for (auto &[path, stamp] : _devStamps) {
+	for (const auto &path : current) {
 		auto now = FolderStamp(path);
-		if (now != stamp) {
-			stamp = std::move(now);
+		const auto i = _devStamps.find(path);
+		if (i == end(_devStamps)) {
+			_devStamps.emplace(path, std::move(now));
+			changed.push_back(path);
+		} else if (i->second != now) {
+			i->second = std::move(now);
 			changed.push_back(path);
 		}
 	}
@@ -310,31 +330,50 @@ void Host::checkDevFolders() {
 	}
 }
 
-void Host::reload(const QString &origin) {
-	auto name = QFileInfo(origin).fileName();
+void Host::unload(const QString &origin) {
 	for (auto i = begin(_plugins); i != end(_plugins); ++i) {
 		if ((*i)->origin() == origin) {
-			name = (*i)->manifest().name;
 			(*i)->stop();
 			_plugins.erase(i);
 			break;
 		}
 	}
-	_invalid.erase(ranges::remove(_invalid, origin, &Invalid::origin), end(_invalid));
+	_invalid.erase(
+		ranges::remove(_invalid, origin, &Invalid::origin),
+		end(_invalid));
+	refreshHooks();
+}
+
+void Host::reload(const QString &origin) {
+	auto name = QFileInfo(origin).fileName();
+	auto display = false;
+	for (const auto &plugin : _plugins) {
+		if (plugin->origin() == origin) {
+			name = plugin->manifest().name;
+			display = plugin->handles(Event::Display);
+		}
+	}
+	unload(origin);
 	const auto invalid = _invalid.size();
 	load(origin);
 	refreshHooks();
+	const auto loaded = (!_plugins.empty()
+		&& _plugins.back()->origin() == origin)
+		? _plugins.back().get()
+		: nullptr;
+	if (display || (loaded && loaded->handles(Event::Display))) {
+		// Texts the old or the new handlers changed are shown again.
+		Plugins::RefreshDisplayText();
+	}
 	const auto ru = Russian();
 	if (_invalid.size() > invalid) {
 		Toast((ru
 			? QString::fromUtf8("Плагин не загружен: ")
 			: u"Plugin not loaded: "_q) + _invalid.back().error);
-	} else if (!_plugins.empty()
-		&& _plugins.back()->origin() == origin
-		&& !_plugins.back()->lastError().isEmpty()) {
+	} else if (loaded && !loaded->lastError().isEmpty()) {
 		Toast((ru
 			? QString::fromUtf8("Ошибка плагина: ")
-			: u"Plugin error: "_q) + _plugins.back()->lastError());
+			: u"Plugin error: "_q) + loaded->lastError());
 	} else {
 		Toast((ru
 			? QString::fromUtf8("Плагин перезагружен: ")
@@ -351,6 +390,7 @@ void Host::stop() {
 	}
 	_plugins.clear();
 	_invalid.clear();
+	SetSink(nullptr); // stop() above enabled hooks again
 }
 
 void Host::refreshHooks() {

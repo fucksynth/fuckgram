@@ -226,7 +226,7 @@ public:
 			std::vector<ProfileRow> &) {
 	}
 	// Cancel: the request is not sent and its caller gets the error
-	// PLUGIN_CANCELLED, so nothing waits for an answer forever.
+	// CLIENT_PLUGIN_CANCELLED, so nothing waits for an answer forever.
 	// Modify: the request is sent with the new body.
 	virtual RawResult request(const RawRequest &) {
 		return {};

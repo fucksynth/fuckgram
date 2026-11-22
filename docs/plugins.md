@@ -95,7 +95,7 @@ off and opens the plugins folder.
 | `tg.timer.after(ms, fn)`, `tg.timer.every(ms, fn)`, `tg.timer.cancel(id)` | — | one-shot and repeating timers (repeating ≥ 100 ms, up to 64) |
 | `tg.json.encode(value)`, `tg.json.decode(text)` | — | JSON ↔ Lua tables; `decode` returns `nil, error` on bad input |
 | `tg.invoke(call)` | `mtproto` | any API method: `local r, err = tg.invoke{ _ = "help.getNearestDc" }` inside `tg.async`, or pass a callback `fn(result, err)` as the 2nd argument; `err` is `{ code, type, description }` |
-| `plugin.on("mtproto.request", fn(call), methods)` | `mtproto` | every request the client sends; return `false` to cancel it (the caller gets `PLUGIN_CANCELLED`), a table to send instead, `nil` to keep |
+| `plugin.on("mtproto.request", fn(call), methods)` | `mtproto` | every request the client sends; return `false` to cancel it (the caller gets the error `CLIENT_PLUGIN_CANCELLED`), a table to send instead, `nil` to keep |
 | `plugin.on("mtproto.response", fn(result, method), methods)` | `mtproto` | every answer (also `rpc_error`) before the client sees it; return a value to replace it |
 | `plugin.on("mtproto.updates", fn(updates))` | `mtproto` | raw updates container; return `false` to drop it, a table to replace it |
 | `tg.log(...)`, `print(...)` | — | write to the client log |
@@ -224,7 +224,7 @@ Everything between the client and the runtime goes through
 | | `message_menu_*` | items in the message context menu |
 | | `main_menu` | items in the main (drawer) menu |
 | Input | `compose_field_*` | read and replace the text being typed |
-| Server | `outgoing_request` | cancel or replace any outgoing MTProto request (by TL constructor); a cancelled request fails with `PLUGIN_CANCELLED` |
+| Server | `outgoing_request` | cancel or replace any outgoing MTProto request (by TL constructor); a cancelled request fails with `CLIENT_PLUGIN_CANCELLED` |
 | | `incoming_response` | replace the server reply to a request (also an error) |
 | | `incoming_updates` | drop or replace a raw updates container |
 | | `incoming_update` | drop a single parsed update before the client applies it |

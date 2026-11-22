@@ -1031,16 +1031,34 @@ void Instance::Private::sendRequest(
 			.body = body,
 		});
 		if (filtered.verdict == Plugins::Verdict::Cancel) {
-			// Answer the caller, so nothing waits for a reply forever.
-			if (const auto fail = callbacks.fail) {
-				InvokeQueued(_instance, [=] {
-					fail(
+			// Answer the caller, so nothing waits for a reply forever. The
+			// answer goes through _parserMap like a server reply: a caller
+			// that cancels meanwhile (MTP::Sender does in its destructor)
+			// is not called after it is gone.
+			if (callbacks.done || callbacks.fail) {
+				QMutexLocker locker(&_parserMapLock);
+				_parserMap.emplace(requestId, std::move(callbacks));
+			}
+			InvokeQueued(_instance, [this, requestId] {
+				auto handler = ResponseHandler();
+				{
+					QMutexLocker locker(&_parserMapLock);
+					const auto i = _parserMap.find(requestId);
+					if (i == _parserMap.end()) {
+						return;
+					}
+					handler = std::move(i->second);
+					_parserMap.erase(i);
+				}
+				if (handler.fail) {
+					// The caller sees CLIENT_PLUGIN_CANCELLED.
+					handler.fail(
 						Error::Local(
 							u"PLUGIN_CANCELLED"_q,
 							u"Cancelled by a plugin."_q),
 						Response{ .requestId = requestId });
-				});
-			}
+				}
+			});
 			return;
 		} else if (filtered.verdict == Plugins::Verdict::Modify) {
 			auto modified = SerializedRequest::Prepare(
