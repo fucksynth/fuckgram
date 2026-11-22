@@ -27,6 +27,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "base/timer.h"
 #include "base/network_reachability.h"
 #include "test/test_rpc_retry.h"
+#include "plugins/plugins_hooks.h"
 
 namespace MTP {
 namespace {
@@ -1017,6 +1018,37 @@ void Instance::Private::sendRequest(
 		crl::time msCanWait,
 		bool needsLayer,
 		mtpRequestId afterRequestId) {
+	// PLUGIN-HOOK: outgoing_request
+	if (needsLayer && Plugins::Has(Plugins::Hook::Request)) {
+		const auto body = mtpBuffer(
+			request->constBegin() + SerializedRequest::kMessageBodyPosition,
+			request->constEnd());
+		auto filtered = Plugins::FilterRequest({
+			.instance = _instance,
+			.requestId = requestId,
+			.dcId = shiftedDcId,
+			.type = body.isEmpty() ? mtpTypeId(0) : mtpTypeId(body[0]),
+			.body = body,
+		});
+		if (filtered.verdict == Plugins::Verdict::Cancel) {
+			// Answer the caller, so nothing waits for a reply forever.
+			if (const auto fail = callbacks.fail) {
+				InvokeQueued(_instance, [=] {
+					fail(
+						Error::Local(
+							u"PLUGIN_CANCELLED"_q,
+							u"Cancelled by a plugin."_q),
+						Response{ .requestId = requestId });
+				});
+			}
+			return;
+		} else if (filtered.verdict == Plugins::Verdict::Modify) {
+			auto modified = SerializedRequest::Prepare(
+				uint32(filtered.body.size()));
+			modified->append(filtered.body);
+			request = std::move(modified);
+		}
+	}
 	const auto session = getSession(shiftedDcId);
 
 	request->requestId = requestId;
@@ -1143,7 +1175,19 @@ bool Instance::Private::hasCallback(mtpRequestId requestId) const {
 	return (it != _parserMap.cend());
 }
 
-void Instance::Private::processCallback(const Response &response) {
+void Instance::Private::processCallback(const Response &original) {
+	// PLUGIN-HOOK: incoming_response
+	auto replaced = std::optional<Response>();
+	if (Plugins::Has(Plugins::Hook::Response)) {
+		if (auto reply = Plugins::FilterResponse(
+				_instance,
+				original.requestId,
+				original.reply)) {
+			replaced = original;
+			replaced->reply = std::move(*reply);
+		}
+	}
+	const auto &response = replaced ? *replaced : original;
 	const auto requestId = response.requestId;
 	ResponseHandler handler;
 	{
@@ -1203,6 +1247,20 @@ void Instance::Private::processCallback(const Response &response) {
 }
 
 void Instance::Private::processUpdate(const Response &message) {
+	// PLUGIN-HOOK: incoming_updates
+	if (Plugins::Has(Plugins::Hook::Updates)) {
+		auto filtered = Plugins::FilterUpdates(_instance, message.reply);
+		if (filtered.verdict == Plugins::Verdict::Cancel) {
+			return;
+		} else if (filtered.verdict == Plugins::Verdict::Modify) {
+			auto modified = message;
+			modified.reply = std::move(filtered.body);
+			if (_updatesHandler) {
+				_updatesHandler(modified);
+			}
+			return;
+		}
+	}
 	if (_updatesHandler) {
 		_updatesHandler(message);
 	}

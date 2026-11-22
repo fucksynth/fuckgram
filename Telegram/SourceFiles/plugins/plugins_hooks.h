@@ -25,6 +25,10 @@ namespace Window {
 class SessionController;
 } // namespace Window
 
+namespace MTP {
+class Instance;
+} // namespace MTP
+
 namespace Ui {
 class PopupMenu;
 } // namespace Ui
@@ -57,6 +61,9 @@ enum class Hook : uint32 {
 	MainMenu,     // ui: items in the main (drawer) menu
 	Update,       // filter: drop an incoming update from the server
 	ProfileRows,  // ui: extra rows in the profile info block
+	Request,      // filter: cancel / replace an outgoing MTProto request
+	Response,     // filter: replace a response to a request
+	Updates,      // filter: drop / replace a raw incoming updates container
 
 	Count,
 };
@@ -135,6 +142,21 @@ struct ClientEventArgs {
 	QString path;             // OpenFile: local path of the file
 };
 
+// Raw MTProto data. `body` is a complete TL object starting with its
+// constructor id, the runtime decodes / encodes it with the TL schema.
+struct RawRequest {
+	not_null<MTP::Instance*> instance; // one per account
+	mtpRequestId requestId = 0;
+	int32 dcId = 0;      // ShiftedDcId, 0 for the main dc
+	mtpTypeId type = 0;  // constructor of the request, e.g. messages.setTyping
+	const mtpBuffer &body;
+};
+
+struct RawResult {
+	Verdict verdict = Verdict::Default;
+	mtpBuffer body; // Modify: the new TL object
+};
+
 struct ProfileRow {
 	QString label;
 	QString value; // also what "Copy" in the row's context menu copies
@@ -202,6 +224,28 @@ public:
 	virtual void profileRows(
 			not_null<PeerData*>,
 			std::vector<ProfileRow> &) {
+	}
+	// Cancel: the request is not sent and its caller gets the error
+	// PLUGIN_CANCELLED, so nothing waits for an answer forever.
+	// Modify: the request is sent with the new body.
+	virtual RawResult request(const RawRequest &) {
+		return {};
+	}
+	// A value replaces the server reply (also an rpc_error) before the
+	// caller sees it. Requests are matched by requestId from request().
+	virtual std::optional<mtpBuffer> response(
+			not_null<MTP::Instance*>,
+			mtpRequestId,
+			const mtpBuffer &) {
+		return std::nullopt;
+	}
+	// Cancel drops the whole container, Modify replaces it. Dropping
+	// updates that carry pts makes the client fetch them again with
+	// getDifference, prefer Modify.
+	virtual RawResult updates(
+			not_null<MTP::Instance*>,
+			const mtpBuffer &) {
+		return {};
 	}
 	// The runtime's own UI: list of plugins, install, settings.
 	virtual bool hasPluginManager() {
@@ -292,6 +336,17 @@ bool SetComposeText(const TextWithTags &text);
 	const MTPUpdate &update);
 
 [[nodiscard]] std::vector<ProfileRow> ProfileRows(not_null<PeerData*> peer);
+
+// MTProto filters. They run only on the main thread; a call from any
+// other thread gets the default answer.
+[[nodiscard]] RawResult FilterRequest(const RawRequest &request);
+[[nodiscard]] std::optional<mtpBuffer> FilterResponse(
+	not_null<MTP::Instance*> instance,
+	mtpRequestId requestId,
+	const mtpBuffer &reply);
+[[nodiscard]] RawResult FilterUpdates(
+	not_null<MTP::Instance*> instance,
+	const mtpBuffer &updates);
 
 // The "Plugins" entry in Settings is shown only with a runtime that has
 // its own manager UI.

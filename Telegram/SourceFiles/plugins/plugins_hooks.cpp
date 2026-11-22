@@ -21,7 +21,9 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 
 #include <crl/crl.h>
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QPointer>
+#include <QtCore/QThread>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
 
@@ -92,6 +94,9 @@ struct ComposeEntry {
 	case Hook::MainMenu: return "main_menu";
 	case Hook::Update: return "update";
 	case Hook::ProfileRows: return "profile_rows";
+	case Hook::Request: return "request";
+	case Hook::Response: return "response";
+	case Hook::Updates: return "updates";
 	case Hook::Count: break;
 	}
 	return "unknown";
@@ -386,6 +391,56 @@ std::vector<ProfileRow> ProfileRows(not_null<PeerData*> peer) {
 		return row.label.isEmpty() || row.value.isEmpty();
 	});
 	return rows;
+}
+
+namespace {
+
+[[nodiscard]] bool OnMainThread() {
+	const auto app = QCoreApplication::instance();
+	return app && (QThread::currentThread() == app->thread());
+}
+
+} // namespace
+
+RawResult FilterRequest(const RawRequest &request) {
+	if (!OnMainThread() || !Ready(Hook::Request)) {
+		return {};
+	}
+	const auto guard = InFlight(Hook::Request);
+	auto result = CurrentSink->request(request);
+	if (result.verdict == Verdict::Modify && result.body.isEmpty()) {
+		result.verdict = Verdict::Default;
+	}
+	return result;
+}
+
+std::optional<mtpBuffer> FilterResponse(
+		not_null<MTP::Instance*> instance,
+		mtpRequestId requestId,
+		const mtpBuffer &reply) {
+	if (!OnMainThread() || !Ready(Hook::Response)) {
+		return std::nullopt;
+	}
+	const auto guard = InFlight(Hook::Response);
+	auto result = CurrentSink->response(instance, requestId, reply);
+	if (result && result->isEmpty()) {
+		return std::nullopt;
+	}
+	return result;
+}
+
+RawResult FilterUpdates(
+		not_null<MTP::Instance*> instance,
+		const mtpBuffer &updates) {
+	if (!OnMainThread() || !Ready(Hook::Updates)) {
+		return {};
+	}
+	const auto guard = InFlight(Hook::Updates);
+	auto result = CurrentSink->updates(instance, updates);
+	if (result.verdict == Verdict::Modify && result.body.isEmpty()) {
+		result.verdict = Verdict::Default;
+	}
+	return result;
 }
 
 bool HasPluginManager() {

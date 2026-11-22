@@ -41,3 +41,6 @@ copy_text_section                # HistoryView "Copy text" context menu action
 incoming_update                  # Api::Updates::feedUpdate: drop an update
 settings_plugins                 # Settings main section: "Plugins" entry (manager UI)
 profile_rows                     # Info::Profile::DetailsFiller::makeInfo: extra rows
+outgoing_request                 # MTP::Instance::Private::sendRequest: cancel / replace a request
+incoming_response                # MTP::Instance::Private::processCallback: replace a reply
+incoming_updates                 # MTP::Instance::Private::processUpdate: drop / replace a container

@@ -69,7 +69,10 @@ Everything between the client and the runtime goes through
 | | `message_menu_*` | items in the message context menu |
 | | `main_menu` | items in the main (drawer) menu |
 | Input | `compose_field_*` | read and replace the text being typed |
-| Server | `incoming_update` | drop an incoming update (typing, statuses, messages...) before the client applies it |
+| Server | `outgoing_request` | cancel or replace any outgoing MTProto request (by TL constructor); a cancelled request fails with `PLUGIN_CANCELLED` |
+| | `incoming_response` | replace the server reply to a request (also an error) |
+| | `incoming_updates` | drop or replace a raw updates container |
+| | `incoming_update` | drop a single parsed update before the client applies it |
 | Profile | `profile_rows` | add rows to the profile info block |
 | Settings | `settings_plugins` | the "Plugins" entry that opens the runtime's manager |
 | Display | `display_*` | replace shown text: message, chat list name, chat title and status |
