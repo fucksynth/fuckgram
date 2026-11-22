@@ -2287,7 +2287,7 @@ int Plugin::ApiConfirm(lua_State *L) {
 			box->addButton(rpl::single(cancelText), [=] {
 				box->closeBox();
 			});
-			box->boxClosing() | rpl::start_with_next([=] {
+			box->boxClosing() | rpl::on_next([=] {
 				finish(false);
 			}, box->lifetime());
 		}));
@@ -2356,14 +2356,14 @@ int Plugin::ApiInput(lua_State *L) {
 				box->closeBox();
 			};
 			field->submits(
-			) | rpl::start_with_next([=](Qt::KeyboardModifiers) {
+			) | rpl::on_next([=](Qt::KeyboardModifiers) {
 				submit();
 			}, field->lifetime());
 			box->addButton(rpl::single(okText), submit);
 			box->addButton(rpl::single(cancelText), [=] {
 				box->closeBox();
 			});
-			box->boxClosing() | rpl::start_with_next([=] {
+			box->boxClosing() | rpl::on_next([=] {
 				finish(std::nullopt);
 			}, box->lifetime());
 		}));
