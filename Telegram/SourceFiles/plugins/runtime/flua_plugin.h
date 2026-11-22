@@ -211,7 +211,7 @@ private:
 	void openLibraries();
 	void registerApi();
 	void runFile(const QString &path); // inside a protected call
-	void requirePermission(const char *permission);
+	void requirePermission(lua_State *L, const char *permission);
 
 	// Stack: function, nargs arguments. Pops them, pushes nresults on
 	// success. On error logs it and returns false.
@@ -241,6 +241,7 @@ private:
 
 	lua_State *_lua = nullptr;
 	size_t _memory = 0;
+	int _running = 0; // plugin code runs: the memory limit applies
 	crl::time _deadline = 0;
 	int _errors = 0;
 	QString _lastError;

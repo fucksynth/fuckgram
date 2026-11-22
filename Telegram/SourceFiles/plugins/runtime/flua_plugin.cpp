@@ -303,6 +303,23 @@ struct DecodeJob {
 	const mtpBuffer *data = nullptr;
 };
 
+// setmetatable without __gc: finalizers run with hooks off, so a loop in
+// one could never be stopped. Lua marks an object for finalization only
+// in setmetatable, checking here is enough.
+int SafeSetMetatable(lua_State *L) {
+	if (lua_istable(L, 2)) {
+		lua_pushliteral(L, "__gc");
+		if (lua_rawget(L, 2) != LUA_TNIL) {
+			return luaL_error(L, "__gc metamethods are not allowed");
+		}
+		lua_pop(L, 1);
+	}
+	lua_pushvalue(L, lua_upvalueindex(1));
+	lua_insert(L, 1);
+	lua_call(L, lua_gettop(L) - 1, 1);
+	return 1;
+}
+
 int RunDecode(lua_State *L) {
 	const auto job = static_cast<const DecodeJob*>(lua_touserdata(L, 1));
 	Tl::Push(L, job->type, *job->data);
@@ -370,9 +387,13 @@ void *Plugin::Alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
 		plugin->_memory -= old;
 		free(ptr);
 		return nullptr;
-	} else if (nsize > old
+	} else if (plugin->_running > 0
+		&& nsize > old
 		&& plugin->_memory + (nsize - old) > kMemoryLimit) {
-		return nullptr; // Lua raises "not enough memory".
+		// Lua raises "not enough memory" inside the protected call. Outside
+		// of one (the client building event arguments) an error would end
+		// in abort(), so there the limit waits for the next call.
+		return nullptr;
 	}
 	const auto result = realloc(ptr, nsize);
 	if (result) {
@@ -506,6 +527,9 @@ void Plugin::openLibraries() {
 	lua_setglobal(_lua, "print");
 	lua_pushcfunction(_lua, &Plugin::ApiRequire);
 	lua_setglobal(_lua, "require");
+	lua_getglobal(_lua, "setmetatable");
+	lua_pushcclosure(_lua, &SafeSetMetatable, 1);
+	lua_setglobal(_lua, "setmetatable");
 
 	lua_newtable(_lua);
 	lua_setfield(_lua, LUA_REGISTRYINDEX, kLoadedKey);
@@ -604,10 +628,11 @@ void Plugin::runFile(const QString &path) {
 	lua_call(_lua, 0, 0);
 }
 
-void Plugin::requirePermission(const char *permission) {
+void Plugin::requirePermission(lua_State *L, const char *permission) {
+	// Raised on the calling state: it may be a tg.async coroutine.
 	if (!manifest().has(permission)) {
 		luaL_error(
-			_lua,
+			L,
 			"permission '%s' is not declared in manifest.json",
 			permission);
 	}
@@ -619,7 +644,9 @@ bool Plugin::call(int nargs, int nresults, crl::time budget) {
 	lua_insert(_lua, base);
 	_deadline = crl::now() + budget;
 	lua_sethook(_lua, &Plugin::CountHook, LUA_MASKCOUNT, kHookInstructions);
+	++_running;
 	const auto status = lua_pcall(_lua, nargs, nresults, base);
+	--_running;
 	lua_sethook(_lua, nullptr, 0, 0);
 	lua_remove(_lua, base);
 	if (status != LUA_OK) {
@@ -635,7 +662,12 @@ bool Plugin::callGlobal(const char *name, crl::time budget) {
 	if (!_lua) {
 		return false;
 	}
-	if (lua_getglobal(_lua, name) != LUA_TFUNCTION) {
+	// Raw: a metatable on _G must not run outside a protected call.
+	lua_pushglobaltable(_lua);
+	lua_pushstring(_lua, name);
+	const auto type = lua_rawget(_lua, -2);
+	lua_remove(_lua, -2);
+	if (type != LUA_TFUNCTION) {
 		lua_pop(_lua, 1);
 		return true;
 	}
@@ -660,7 +692,10 @@ bool Plugin::protect(
 	lua_insert(_lua, base);
 	lua_pushlightuserdata(_lua, &body);
 	lua_insert(_lua, base + 1);
-	if (lua_pcall(_lua, nargs + 1, nresults, 0) == LUA_OK) {
+	++_running;
+	const auto status = lua_pcall(_lua, nargs + 1, nresults, 0);
+	--_running;
+	if (status == LUA_OK) {
 		return true;
 	}
 	const auto message = ToString(_lua, -1);
@@ -681,8 +716,10 @@ void Plugin::fail(const QString &error) {
 			).arg(manifest().id
 			).arg(_errors));
 		// Not right now: we may be inside a call into this state.
-		crl::on_main(this, [=] {
-			stop();
+		crl::on_main(this, [=, generation = _generation] {
+			if (_generation == generation) {
+				stop();
+			}
 		});
 	}
 }
@@ -960,13 +997,14 @@ void Plugin::profileRows(
 			for (auto i = lua_Integer(1); i <= lua_Integer(count); ++i) {
 				lua_rawgeti(_lua, -1, i);
 				if (lua_istable(_lua, -1)) {
-					lua_getfield(_lua, -1, "label");
-					if (lua_isnil(_lua, -1)) {
+					// Raw: no metamethods outside a protected call.
+					lua_pushliteral(_lua, "label");
+					if (lua_rawget(_lua, -2) == LUA_TNIL) {
 						lua_pop(_lua, 1);
 						lua_rawgeti(_lua, -1, 1);
 					}
-					lua_getfield(_lua, -2, "value");
-					if (lua_isnil(_lua, -1)) {
+					lua_pushliteral(_lua, "value");
+					if (lua_rawget(_lua, -3) == LUA_TNIL) {
 						lua_pop(_lua, 1);
 						lua_rawgeti(_lua, -2, 2);
 					}
@@ -1213,7 +1251,7 @@ int Plugin::ApiRequire(lua_State *L) {
 	const auto plugin = From(L);
 	const auto name = CheckString(L, 1);
 	static const auto check = QRegularExpression(
-		u"^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*$"_q);
+		u"^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*\\z"_q); // \z: no final \n
 	if (!check.match(name).hasMatch()) {
 		return luaL_error(L, "bad module name: %s", name.toUtf8().constData());
 	}
@@ -1268,32 +1306,32 @@ int Plugin::ApiOn(lua_State *L) {
 	}
 	switch (event) {
 	case Event::MessageNew:
-		plugin->requirePermission(kPermMessagesRead);
+		plugin->requirePermission(L, kPermMessagesRead);
 		break;
 	case Event::MessageSend:
-		plugin->requirePermission(kPermMessagesSend);
+		plugin->requirePermission(L, kPermMessagesSend);
 		break;
 	case Event::AppState:
 		break;
 	case Event::UrlOpen:
-		plugin->requirePermission(kPermLinks);
+		plugin->requirePermission(L, kPermLinks);
 		break;
 	case Event::Action:
-		plugin->requirePermission(kPermActions);
+		plugin->requirePermission(L, kPermActions);
 		break;
 	case Event::Display:
-		plugin->requirePermission(kPermDisplay);
+		plugin->requirePermission(L, kPermDisplay);
 		break;
 	case Event::Screen:
-		plugin->requirePermission(kPermChatsRead);
+		plugin->requirePermission(L, kPermChatsRead);
 		break;
 	case Event::ProfileRows:
-		plugin->requirePermission(kPermUi);
+		plugin->requirePermission(L, kPermUi);
 		break;
 	case Event::MtprotoRequest:
 	case Event::MtprotoResponse:
 	case Event::MtprotoUpdates:
-		plugin->requirePermission(kPermMtproto);
+		plugin->requirePermission(L, kPermMtproto);
 		if (!Tl::Available()) {
 			return luaL_error(L, "the TL schema is not available");
 		}
@@ -1351,7 +1389,7 @@ int Plugin::ApiOn(lua_State *L) {
 
 int Plugin::ApiMenu(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermUi);
+	plugin->requirePermission(L, kPermUi);
 	const auto place = CheckString(L, 1);
 	const auto text = CheckString(L, 2);
 	luaL_checktype(L, 3, LUA_TFUNCTION);
@@ -1381,7 +1419,7 @@ int Plugin::ApiMenu(lua_State *L) {
 
 int Plugin::ApiSettingsGet(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermStorage);
+	plugin->requirePermission(L, kPermStorage);
 	const auto key = CheckString(L, 1);
 	const auto value = plugin->_settings.value(key);
 	if (value.isBool()) {
@@ -1405,7 +1443,7 @@ int Plugin::ApiSettingsGet(lua_State *L) {
 
 int Plugin::ApiSettingsSet(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermStorage);
+	plugin->requirePermission(L, kPermStorage);
 	const auto key = CheckString(L, 1);
 	switch (lua_type(L, 2)) {
 	case LUA_TNIL:
@@ -1429,7 +1467,7 @@ int Plugin::ApiSettingsSet(lua_State *L) {
 
 int Plugin::ApiToast(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermUi);
+	plugin->requirePermission(L, kPermUi);
 	const auto text = CheckString(L, 1);
 	crl::on_main(plugin, [=] {
 		if (const auto window = Core::App().activeWindow()) {
@@ -1443,7 +1481,7 @@ int Plugin::ApiToast(lua_State *L) {
 
 int Plugin::ApiSendMessage(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermMessagesSend);
+	plugin->requirePermission(L, kPermMessagesSend);
 	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
 	const auto text = CheckString(L, 2);
 	// { reply_to = message id, silent = true, schedule = unixtime }
@@ -1493,7 +1531,7 @@ int Plugin::ApiSendMessage(lua_State *L) {
 
 int Plugin::ApiComposeGet(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermCompose);
+	plugin->requirePermission(L, kPermCompose);
 	if (const auto text = Plugins::ComposeText()) {
 		PushString(L, text->text);
 	} else {
@@ -1504,7 +1542,7 @@ int Plugin::ApiComposeGet(lua_State *L) {
 
 int Plugin::ApiComposeSet(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermCompose);
+	plugin->requirePermission(L, kPermCompose);
 	const auto text = CheckString(L, 1);
 	if (!Plugins::ComposeText()) {
 		lua_pushboolean(L, 0);
@@ -1520,7 +1558,7 @@ int Plugin::ApiComposeSet(lua_State *L) {
 
 int Plugin::ApiRefreshDisplay(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermDisplay);
+	plugin->requirePermission(L, kPermDisplay);
 	crl::on_main(plugin, [] {
 		Plugins::RefreshDisplayText();
 	});
@@ -1531,19 +1569,23 @@ int Plugin::ApiRefreshDisplay(lua_State *L) {
 
 void Plugin::resume(lua_State *thread, lua_State *from, int nargs) {
 	auto results = 0;
+	++_running;
 	const auto status = lua_resume(thread, from, nargs, &results);
+	--_running;
 	if (status == LUA_YIELD) {
 		lua_pop(thread, results);
 		return; // Waits for a reply, resumed by finishRequest().
 	} else if (status != LUA_OK) {
+		// The traceback goes to the thread that resumed this one.
+		const auto out = from ? from : _lua;
 		const auto message = lua_tostring(thread, -1);
 		luaL_traceback(
-			_lua,
+			out,
 			thread,
 			message ? message : "(error object)",
 			0);
-		const auto error = ToString(_lua, -1);
-		lua_pop(_lua, 1);
+		const auto error = ToString(out, -1);
+		lua_pop(out, 1);
 		fail(error);
 	}
 	forgetThread(thread);
@@ -1592,6 +1634,9 @@ int Plugin::ApiAsync(lua_State *L) {
 	luaL_checktype(L, 1, LUA_TFUNCTION);
 	const auto nargs = lua_gettop(L) - 1;
 	const auto thread = lua_newthread(L); // L: fn, args..., thread
+	if (!lua_checkstack(thread, nargs + 1)) {
+		return luaL_error(L, "too many arguments for tg.async");
+	}
 	lua_insert(L, 1);                     // L: thread, fn, args...
 	lua_xmove(L, thread, nargs + 1);      // thread: fn, args...
 	plugin->_threads.emplace(thread, luaL_ref(L, LUA_REGISTRYINDEX));
@@ -1678,7 +1723,8 @@ int Plugin::ApiHttpRequest(lua_State *L) {
 	const auto plugin = From(L);
 	luaL_checktype(L, 1, LUA_TTABLE);
 	const auto callback = lua_isfunction(L, 2);
-	if (!callback && !plugin->_threads.contains(L)) {
+	if (!callback
+		&& !(plugin->_threads.contains(L) && lua_isyieldable(L))) {
 		return luaL_error(
 			L,
 			"tg.http.request needs a callback or a tg.async(...) coroutine");
@@ -1713,7 +1759,7 @@ int Plugin::ApiHttpRequest(lua_State *L) {
 	} else if (body.size() > kMaxRequestBody) {
 		return luaL_error(L, "request body is too large");
 	}
-	static const auto methodCheck = QRegularExpression(u"^[A-Z]{1,16}$"_q);
+	static const auto methodCheck = QRegularExpression(u"^[A-Z]{1,16}\\z"_q);
 	if (!methodCheck.match(QString::fromLatin1(method)).hasMatch()) {
 		return luaL_error(L, "bad HTTP method");
 	}
@@ -1729,7 +1775,13 @@ int Plugin::ApiHttpRequest(lua_State *L) {
 		lua_pushnil(L);
 		while (lua_next(L, -2)) {
 			if (lua_type(L, -2) == LUA_TSTRING && lua_isstring(L, -1)) {
-				request.setRawHeader(ToBytes(L, -2), ToBytes(L, -1));
+				const auto name = ToBytes(L, -2);
+				const auto value = ToBytes(L, -1);
+				if (name.contains('\r') || name.contains('\n')
+					|| value.contains('\r') || value.contains('\n')) {
+					return luaL_error(L, "line breaks in HTTP headers");
+				}
+				request.setRawHeader(name, value);
 			}
 			lua_pop(L, 1);
 		}
@@ -1832,21 +1884,21 @@ int Plugin::ApiJsonEncode(lua_State *L) {
 int Plugin::ApiJsonDecode(lua_State *L) {
 	auto size = size_t(0);
 	const auto data = luaL_checklstring(L, 1, &size);
+	// Qt 5 parses only an array or an object at the top: wrap, so plain
+	// values like "5" or "true" (what tg.json.encode gives) work too.
 	auto error = QJsonParseError();
 	const auto document = QJsonDocument::fromJson(
-		QByteArray(data, int(size)),
+		'[' + QByteArray(data, int(size)) + ']',
 		&error);
-	if (error.error != QJsonParseError::NoError) {
+	if (error.error != QJsonParseError::NoError
+		|| document.array().size() != 1) {
 		lua_pushnil(L);
-		PushString(L, error.errorString());
+		PushString(L, (error.error != QJsonParseError::NoError)
+			? error.errorString()
+			: u"expected one JSON value"_q);
 		return 2;
 	}
-	PushJson(
-		L,
-		document.isArray()
-			? QJsonValue(document.array())
-			: QJsonValue(document.object()),
-		0);
+	PushJson(L, document.array().at(0), 0);
 	return 1;
 }
 
@@ -1854,10 +1906,11 @@ int Plugin::ApiJsonDecode(lua_State *L) {
 
 int Plugin::ApiInvoke(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermMtproto);
+	plugin->requirePermission(L, kPermMtproto);
 	luaL_checktype(L, 1, LUA_TTABLE);
 	const auto callback = lua_isfunction(L, 2);
-	if (!callback && !plugin->_threads.contains(L)) {
+	if (!callback
+		&& !(plugin->_threads.contains(L) && lua_isyieldable(L))) {
 		return luaL_error(
 			L,
 			"tg.invoke needs a callback or a tg.async(...) coroutine");
@@ -1901,6 +1954,31 @@ int Plugin::ApiInvoke(lua_State *L) {
 				thread);
 		}
 	};
+	// An answer always comes: also when the request is dropped with its
+	// session (logout, account switch) and neither done nor fail runs.
+	struct Pending {
+		Fn<void(const mtpBuffer*, const MTP::Error*)> finish;
+		bool answered = false;
+
+		~Pending() {
+			if (!answered && finish) {
+				crl::on_main([finish = finish] {
+					const auto error = MTP::Error::Local(
+						u"PLUGIN_ABORTED"_q,
+						u"The request was dropped."_q);
+					finish(nullptr, &error);
+				});
+			}
+		}
+	};
+	const auto pending = std::make_shared<Pending>();
+	pending->finish = finish;
+	const auto answer = [=](
+			const mtpBuffer *reply,
+			const MTP::Error *error) {
+		pending->answered = true;
+		pending->finish(reply, error);
+	};
 	// Sent on the next event loop turn, not from inside a running hook.
 	crl::on_main(session, [=, body = std::move(body)] {
 		auto request = MTP::details::SerializedRequest::Prepare(
@@ -1911,13 +1989,13 @@ int Plugin::ApiInvoke(lua_State *L) {
 			std::move(request),
 			MTP::ResponseHandler{
 				.done = [=](const MTP::Response &response) {
-					finish(&response.reply, nullptr);
+					answer(&response.reply, nullptr);
 					return true;
 				},
 				.fail = [=](
 						const MTP::Error &error,
 						const MTP::Response &) {
-					finish(nullptr, &error);
+					answer(nullptr, &error);
 					return true;
 				},
 			},
@@ -1967,7 +2045,7 @@ void Plugin::finishInvoke(
 
 int Plugin::ApiEditMessage(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermMessagesManage);
+	plugin->requirePermission(L, kPermMessagesManage);
 	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
 	const auto msgId = MsgId(luaL_checkinteger(L, 2));
 	const auto text = CheckString(L, 3);
@@ -2000,7 +2078,7 @@ int Plugin::ApiEditMessage(lua_State *L) {
 
 int Plugin::ApiDeleteMessages(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermMessagesManage);
+	plugin->requirePermission(L, kPermMessagesManage);
 	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
 	auto ids = std::vector<MsgId>();
 	if (lua_isinteger(L, 2)) {
@@ -2048,7 +2126,7 @@ int Plugin::ApiDeleteMessages(lua_State *L) {
 
 int Plugin::ApiGetMessage(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermMessagesRead);
+	plugin->requirePermission(L, kPermMessagesRead);
 	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
 	const auto msgId = MsgId(luaL_checkinteger(L, 2));
 	const auto session = ActiveSession();
@@ -2065,7 +2143,7 @@ int Plugin::ApiGetMessage(lua_State *L) {
 
 int Plugin::ApiPeer(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermChatsRead);
+	plugin->requirePermission(L, kPermChatsRead);
 	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
 	const auto session = ActiveSession();
 	const auto peer = (session && peerId)
@@ -2081,7 +2159,7 @@ int Plugin::ApiPeer(lua_State *L) {
 
 int Plugin::ApiMe(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermChatsRead);
+	plugin->requirePermission(L, kPermChatsRead);
 	if (const auto session = ActiveSession()) {
 		plugin->pushPeer(L, session->user());
 	} else {
@@ -2092,7 +2170,7 @@ int Plugin::ApiMe(lua_State *L) {
 
 int Plugin::ApiCurrentChat(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermChatsRead);
+	plugin->requirePermission(L, kPermChatsRead);
 	const auto controller = ActiveController();
 	const auto peer = controller
 		? controller->activeChatCurrent().peer()
@@ -2115,7 +2193,7 @@ Plugin::Waiter Plugin::waiter(lua_State *L, int index, const char *what) {
 	if (lua_isfunction(L, index)) {
 		lua_pushvalue(L, index);
 		result.callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
-	} else if (_threads.contains(L)) {
+	} else if (_threads.contains(L) && lua_isyieldable(L)) {
 		result.thread = L;
 	} else {
 		luaL_error(
@@ -2139,7 +2217,7 @@ void Plugin::answer(const Waiter &waiter, Fn<void(lua_State*)> push) {
 
 int Plugin::ApiAlert(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermUi);
+	plugin->requirePermission(L, kPermUi);
 	const auto text = CheckString(L, 1);
 	const auto title = (lua_type(L, 2) == LUA_TSTRING)
 		? ToString(L, 2)
@@ -2159,7 +2237,7 @@ int Plugin::ApiAlert(lua_State *L) {
 // tg.ui.confirm("text") or { title, text, ok, cancel } -> true / false
 int Plugin::ApiConfirm(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermUi);
+	plugin->requirePermission(L, kPermUi);
 	auto title = QString();
 	auto text = QString();
 	auto ok = QString();
@@ -2220,7 +2298,7 @@ int Plugin::ApiConfirm(lua_State *L) {
 // tg.ui.input{ title, text, value, placeholder, ok, cancel } -> text / nil
 int Plugin::ApiInput(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermUi);
+	plugin->requirePermission(L, kPermUi);
 	luaL_checktype(L, 1, LUA_TTABLE);
 	const auto title = StringField(L, 1, "title");
 	const auto text = StringField(L, 1, "text");
@@ -2295,7 +2373,7 @@ int Plugin::ApiInput(lua_State *L) {
 
 int Plugin::ApiCopy(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermUi);
+	plugin->requirePermission(L, kPermUi);
 	const auto text = CheckString(L, 1);
 	crl::on_main(plugin, [=] {
 		QGuiApplication::clipboard()->setText(text);
@@ -2322,7 +2400,7 @@ int Plugin::ApiResource(lua_State *L) {
 QString Plugin::filePath(lua_State *L, int index) const {
 	const auto name = CheckString(L, index);
 	static const auto check = QRegularExpression(
-		u"^[A-Za-z0-9_][A-Za-z0-9_.\\-]{0,63}$"_q);
+		u"^[A-Za-z0-9_][A-Za-z0-9_.\\-]{0,63}\\z"_q);
 	if (!check.match(name).hasMatch() || name.contains(u".."_q)) {
 		luaL_error(
 			L,
@@ -2334,7 +2412,7 @@ QString Plugin::filePath(lua_State *L, int index) const {
 
 int Plugin::ApiFileRead(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermStorage);
+	plugin->requirePermission(L, kPermStorage);
 	auto file = QFile(plugin->filePath(L, 1));
 	if (file.size() > kMaxFile || !file.open(QIODevice::ReadOnly)) {
 		lua_pushnil(L);
@@ -2347,7 +2425,7 @@ int Plugin::ApiFileRead(lua_State *L) {
 
 int Plugin::ApiFileWrite(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermStorage);
+	plugin->requirePermission(L, kPermStorage);
 	const auto path = plugin->filePath(L, 1);
 	auto size = size_t(0);
 	const auto data = luaL_checklstring(L, 2, &size);
@@ -2375,14 +2453,14 @@ int Plugin::ApiFileWrite(lua_State *L) {
 
 int Plugin::ApiFileRemove(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermStorage);
+	plugin->requirePermission(L, kPermStorage);
 	lua_pushboolean(L, QFile::remove(plugin->filePath(L, 1)) ? 1 : 0);
 	return 1;
 }
 
 int Plugin::ApiFileList(lua_State *L) {
 	const auto plugin = From(L);
-	plugin->requirePermission(kPermStorage);
+	plugin->requirePermission(L, kPermStorage);
 	const auto names = QDir(plugin->_dataPath + u"files/"_q).entryList(
 		QDir::Files,
 		QDir::Name);

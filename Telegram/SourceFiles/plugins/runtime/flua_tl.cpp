@@ -861,17 +861,39 @@ void Writer::value(int type, int index, int depth) {
 		}
 		object(_schema.constructors[info.ref], index, depth);
 		break;
-	case Kind::Any:
+	case Kind::Any: {
+		auto vector = false;
+		if (lua_type(_lua, index) == LUA_TTABLE) {
+			lua_pushliteral(_lua, "_");
+			vector = (lua_rawget(_lua, index) == LUA_TNIL);
+			lua_pop(_lua, 1);
+		}
 		if (lua_type(_lua, index) == LUA_TBOOLEAN) {
 			push(mtpPrime(lua_toboolean(_lua, index)
 				? kBoolTrue
 				: kBoolFalse));
+		} else if (vector) {
+			// An array read as Object: a vector of objects, as the Reader
+			// gives it.
+			const auto count = lua_rawlen(_lua, index);
+			if (count > size_t(kMaxWrite)) {
+				fail("the array is too long");
+			}
+			push(mtpPrime(kVectorId));
+			push(mtpPrime(int32(count)));
+			for (auto i = lua_Integer(1); i <= lua_Integer(count); ++i) {
+				_path.push_back('[' + QByteArray::number(i) + ']');
+				lua_rawgeti(_lua, index, i);
+				value(_schema.anyType, -1, depth + 1);
+				lua_pop(_lua, 1);
+				_path.pop_back();
+			}
 		} else {
 			const auto &constructor = named(index, -1, false);
 			push(mtpPrime(constructor.id));
 			object(constructor, index, depth);
 		}
-		break;
+	} break;
 	case Kind::Query: {
 		const auto &constructor = named(index, -1, true);
 		push(mtpPrime(constructor.id));

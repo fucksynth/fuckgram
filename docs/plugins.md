@@ -94,7 +94,7 @@ off and opens the plugins folder.
 | `tg.http.request{ url, method, headers, body }` | `net:<host>` | HTTPS only, to declared hosts (`net:api.example.com`, `net:*.example.com`); returns `{ status, body, headers, error }`; no automatic redirects; pass a callback as the 2nd argument instead of using `tg.async` |
 | `tg.timer.after(ms, fn)`, `tg.timer.every(ms, fn)`, `tg.timer.cancel(id)` | — | one-shot and repeating timers (repeating ≥ 100 ms, up to 64) |
 | `tg.json.encode(value)`, `tg.json.decode(text)` | — | JSON ↔ Lua tables; `decode` returns `nil, error` on bad input |
-| `tg.invoke(call)` | `mtproto` | any API method: `local r, err = tg.invoke{ _ = "help.getNearestDc" }` inside `tg.async`, or pass a callback `fn(result, err)` as the 2nd argument; `err` is `{ code, type, description }` |
+| `tg.invoke(call)` | `mtproto` | any API method: `local r, err = tg.invoke{ _ = "help.getNearestDc" }` inside `tg.async`, or pass a callback `fn(result, err)` as the 2nd argument; `err` is `{ code, type, description }`; a request dropped with its account (logout) ends with `CLIENT_PLUGIN_ABORTED` |
 | `plugin.on("mtproto.request", fn(call), methods)` | `mtproto` | every request the client sends; return `false` to cancel it (the caller gets the error `CLIENT_PLUGIN_CANCELLED`), a table to send instead, `nil` to keep |
 | `plugin.on("mtproto.response", fn(result, method), methods)` | `mtproto` | every answer (also `rpc_error`) before the client sees it; return a value to replace it |
 | `plugin.on("mtproto.updates", fn(updates))` | `mtproto` | raw updates container; return `false` to drop it, a table to replace it |
@@ -153,8 +153,9 @@ end, { "messages.setTyping" })
 
 The sandbox has `string` (no `dump`), `table`, `math`, `utf8`, `coroutine` and
 `os.time` / `os.clock` / `os.date` / `os.difftime`. There is no `io`, no
-`load` / `loadfile` / `dofile`, no `debug`, no `rawget` / `rawset`, and only
-text Lua is accepted, never bytecode. A call that runs too long is stopped
+`load` / `loadfile` / `dofile`, no `debug`, no `rawget` / `rawset`, no `__gc`
+metamethods (finalizers can't be time-limited), and only text Lua is accepted,
+never bytecode. A call that runs too long is stopped
 (50 ms for the send filter, 200 ms for events, 1 s for menu clicks, 2 s at
 start), a plugin is limited to 64 MB, and after 5 errors it is stopped.
 
