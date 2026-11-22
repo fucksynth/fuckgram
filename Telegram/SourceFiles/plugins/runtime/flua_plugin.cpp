@@ -7,12 +7,19 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/runtime/flua_plugin.h"
 
 #include "api/api_common.h"
+#include "api/api_editing.h"
 #include "apiwrap.h"
 #include "core/application.h"
+#include "base/unixtime.h"
+#include "data/data_drafts.h"
+#include "data/data_histories.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
+#include "data/data_user.h"
+#include "dialogs/dialogs_key.h"
 #include "history/history.h"
 #include "history/history_item.h"
+#include "lang/lang_keys.h"
 #include "logs.h"
 #include "main/main_account.h"
 #include "main/main_domain.h"
@@ -23,8 +30,14 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/plugins_hooks.h"
 #include "plugins/runtime/flua_runtime.h"
 #include "plugins/runtime/flua_tl.h"
+#include "ui/boxes/confirm_box.h"
+#include "ui/layers/generic_box.h"
+#include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/labels.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
+#include "styles/style_layers.h"
+#include "styles/style_widgets.h"
 
 #include "base/call_delayed.h"
 
@@ -34,6 +47,8 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtCore/QJsonDocument>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QUrl>
+#include <QtGui/QClipboard>
+#include <QtGui/QGuiApplication>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
@@ -64,6 +79,8 @@ constexpr auto kMaxResponseBody = qint64(4 * 1024 * 1024);
 constexpr auto kRequestTimeout = 20000;
 constexpr auto kMaxJsonDepth = 64;
 constexpr auto kMaxInvokes = 32;
+constexpr auto kMaxInput = 4096;
+constexpr auto kMaxDelete = 100;
 
 void PushString(lua_State *L, const QString &value) {
 	const auto utf8 = value.toUtf8();
@@ -185,6 +202,21 @@ void PushJson(lua_State *L, const QJsonValue &value, int depth) {
 	auto size = size_t(0);
 	const auto data = lua_tolstring(L, index, &size);
 	return data ? QByteArray(data, int(size)) : QByteArray();
+}
+
+// A string field of the table at `index`, empty if absent.
+[[nodiscard]] QString StringField(lua_State *L, int index, const char *name) {
+	lua_getfield(L, index, name);
+	auto result = (lua_type(L, -1) == LUA_TSTRING)
+		? ToString(L, -1)
+		: QString();
+	lua_pop(L, 1);
+	return result;
+}
+
+[[nodiscard]] Window::SessionController *ActiveController() {
+	const auto window = Core::App().activeWindow();
+	return window ? window->sessionController() : nullptr;
 }
 
 [[nodiscard]] Main::Session *ActiveSession() {
@@ -506,13 +538,27 @@ void Plugin::registerApi() {
 	set("toast", &Plugin::ApiToast);
 	lua_newtable(_lua);
 	set("send", &Plugin::ApiSendMessage);
+	set("edit", &Plugin::ApiEditMessage);
+	set("delete", &Plugin::ApiDeleteMessages);
+	set("get", &Plugin::ApiGetMessage);
 	lua_setfield(_lua, -2, "messages");
+	lua_newtable(_lua);
+	set("get", &Plugin::ApiPeer);
+	lua_setfield(_lua, -2, "peers");
+	lua_newtable(_lua);
+	set("current", &Plugin::ApiCurrentChat);
+	lua_setfield(_lua, -2, "chats");
+	set("me", &Plugin::ApiMe);
 	lua_newtable(_lua);
 	set("get", &Plugin::ApiComposeGet);
 	set("set", &Plugin::ApiComposeSet);
 	lua_setfield(_lua, -2, "compose");
 	lua_newtable(_lua);
 	set("refresh", &Plugin::ApiRefreshDisplay);
+	set("alert", &Plugin::ApiAlert);
+	set("confirm", &Plugin::ApiConfirm);
+	set("input", &Plugin::ApiInput);
+	set("copy", &Plugin::ApiCopy);
 	lua_setfield(_lua, -2, "ui");
 	set("async", &Plugin::ApiAsync);
 	lua_newtable(_lua);
@@ -640,20 +686,47 @@ const std::vector<MenuEntry> &Plugin::menu() const {
 	return _menu;
 }
 
-void Plugin::pushMessage(not_null<HistoryItem*> item) {
-	lua_createtable(_lua, 0, 6);
-	lua_pushinteger(_lua, lua_Integer(item->id.bare));
-	lua_setfield(_lua, -2, "id");
-	lua_pushinteger(_lua, BotApiId(item->history()->peer->id));
-	lua_setfield(_lua, -2, "peer");
-	lua_pushinteger(_lua, BotApiId(item->from()->id));
-	lua_setfield(_lua, -2, "from");
-	PushString(_lua, item->originalText().text);
-	lua_setfield(_lua, -2, "text");
-	lua_pushboolean(_lua, item->out() ? 1 : 0);
-	lua_setfield(_lua, -2, "out");
-	lua_pushinteger(_lua, lua_Integer(item->date()));
-	lua_setfield(_lua, -2, "date");
+void Plugin::pushMessage(lua_State *L, not_null<HistoryItem*> item) {
+	lua_createtable(L, 0, 6);
+	lua_pushinteger(L, lua_Integer(item->id.bare));
+	lua_setfield(L, -2, "id");
+	lua_pushinteger(L, BotApiId(item->history()->peer->id));
+	lua_setfield(L, -2, "peer");
+	lua_pushinteger(L, BotApiId(item->from()->id));
+	lua_setfield(L, -2, "from");
+	PushString(L, item->originalText().text);
+	lua_setfield(L, -2, "text");
+	lua_pushboolean(L, item->out() ? 1 : 0);
+	lua_setfield(L, -2, "out");
+	lua_pushinteger(L, lua_Integer(item->date()));
+	lua_setfield(L, -2, "date");
+}
+
+void Plugin::pushPeer(lua_State *L, not_null<PeerData*> peer) {
+	lua_createtable(L, 0, 8);
+	lua_pushinteger(L, BotApiId(peer->id));
+	lua_setfield(L, -2, "id");
+	const auto user = peer->asUser();
+	lua_pushstring(L, user
+		? (user->isBot() ? "bot" : "user")
+		: peer->isChat()
+		? "group"
+		: peer->isMegagroup()
+		? "supergroup"
+		: "channel");
+	lua_setfield(L, -2, "type");
+	PushString(L, peer->name());
+	lua_setfield(L, -2, "name");
+	if (const auto username = peer->username(); !username.isEmpty()) {
+		PushString(L, username);
+		lua_setfield(L, -2, "username");
+	}
+	lua_pushboolean(L, peer->isSelf() ? 1 : 0);
+	lua_setfield(L, -2, "is_self");
+	lua_pushboolean(L, peer->isPremium() ? 1 : 0);
+	lua_setfield(L, -2, "premium");
+	lua_pushboolean(L, peer->isVerified() ? 1 : 0);
+	lua_setfield(L, -2, "verified");
 }
 
 void Plugin::messageNew(not_null<HistoryItem*> item) {
@@ -663,7 +736,7 @@ void Plugin::messageNew(not_null<HistoryItem*> item) {
 			return;
 		}
 		lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
-		pushMessage(item);
+		pushMessage(_lua, item);
 		call(1, 0, kEventBudget);
 	}
 }
@@ -723,7 +796,7 @@ void Plugin::menuClicked(int ref, PeerData *peer, HistoryItem *item) {
 		lua_setfield(_lua, -2, "peer");
 	}
 	if (item) {
-		pushMessage(item);
+		pushMessage(_lua, item);
 		lua_setfield(_lua, -2, "message");
 	}
 	call(1, 0, kClickBudget);
@@ -739,7 +812,7 @@ void Plugin::pushContext(PeerData *peer, HistoryItem *item) {
 		lua_setfield(_lua, -2, "peer");
 	}
 	if (item) {
-		pushMessage(item);
+		pushMessage(_lua, item);
 		lua_setfield(_lua, -2, "message");
 	}
 }
@@ -1364,6 +1437,24 @@ int Plugin::ApiSendMessage(lua_State *L) {
 	plugin->requirePermission(kPermMessagesSend);
 	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
 	const auto text = CheckString(L, 2);
+	// { reply_to = message id, silent = true, schedule = unixtime }
+	auto replyTo = MsgId();
+	auto silent = false;
+	auto scheduled = TimeId();
+	if (!lua_isnoneornil(L, 3)) {
+		luaL_checktype(L, 3, LUA_TTABLE);
+		lua_getfield(L, 3, "reply_to");
+		if (lua_isinteger(L, -1)) {
+			replyTo = MsgId(lua_tointeger(L, -1));
+		}
+		lua_getfield(L, 3, "silent");
+		silent = lua_toboolean(L, -1) != 0;
+		lua_getfield(L, 3, "schedule");
+		if (lua_isinteger(L, -1)) {
+			scheduled = TimeId(lua_tointeger(L, -1));
+		}
+		lua_pop(L, 3);
+	}
 	const auto session = ActiveSession();
 	if (!peerId || !session || text.isEmpty()) {
 		lua_pushboolean(L, 0);
@@ -1374,7 +1465,15 @@ int Plugin::ApiSendMessage(lua_State *L) {
 	// send filter.
 	crl::on_main(session, [=] {
 		const auto history = session->data().history(peerId);
-		auto message = Api::MessageToSend(Api::SendAction(history));
+		auto action = Api::SendAction(history);
+		action.options.silent = silent;
+		action.options.scheduled = scheduled;
+		if (replyTo) {
+			action.replyTo = FullReplyTo{
+				.messageId = FullMsgId(peerId, replyTo),
+			};
+		}
+		auto message = Api::MessageToSend(std::move(action));
 		message.textWithTags = TextWithTags{ text };
 		const auto bypass = Plugins::BypassScope();
 		session->api().sendMessage(std::move(message));
@@ -1853,6 +1952,346 @@ void Plugin::finishInvoke(
 			PushError(L, error->code(), error->type(), error->description());
 		}
 	});
+}
+
+// Messages and chats.
+
+int Plugin::ApiEditMessage(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermMessagesManage);
+	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
+	const auto msgId = MsgId(luaL_checkinteger(L, 2));
+	const auto text = CheckString(L, 3);
+	const auto session = ActiveSession();
+	const auto itemId = FullMsgId(peerId, msgId);
+	const auto item = session ? session->data().message(itemId) : nullptr;
+	if (!item || text.isEmpty() || !item->allowsEdit(base::unixtime::now())) {
+		lua_pushboolean(L, 0);
+		return 1;
+	}
+	crl::on_main(session, [=] {
+		const auto item = session->data().message(itemId);
+		if (!item) {
+			return;
+		}
+		Api::EditTextMessage(
+			item,
+			TextWithEntities{ text },
+			Data::WebPageDraft::FromItem(item),
+			Api::SendOptions(),
+			[](mtpRequestId) {},
+			[=](const QString &error, mtpRequestId) {
+				LOG(("Plugins: edit failed: %1").arg(error));
+			},
+			false);
+	});
+	lua_pushboolean(L, 1);
+	return 1;
+}
+
+int Plugin::ApiDeleteMessages(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermMessagesManage);
+	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
+	auto ids = std::vector<MsgId>();
+	if (lua_isinteger(L, 2)) {
+		ids.push_back(MsgId(lua_tointeger(L, 2)));
+	} else {
+		luaL_checktype(L, 2, LUA_TTABLE);
+		const auto count = lua_Integer(lua_rawlen(L, 2));
+		if (count > kMaxDelete) {
+			return luaL_error(L, "up to 100 messages at once");
+		}
+		for (auto i = lua_Integer(1); i <= count; ++i) {
+			lua_rawgeti(L, 2, i);
+			if (!lua_isinteger(L, -1)) {
+				return luaL_error(L, "message ids must be integers");
+			}
+			ids.push_back(MsgId(lua_tointeger(L, -1)));
+			lua_pop(L, 1);
+		}
+	}
+	auto revoke = (lua_toboolean(L, 3) != 0); // for everyone
+	const auto session = ActiveSession();
+	auto list = MessageIdsList();
+	if (session) {
+		const auto now = base::unixtime::now();
+		for (const auto id : ids) {
+			const auto item = session->data().message(FullMsgId(peerId, id));
+			if (item && item->canDelete()) {
+				list.push_back(item->fullId());
+				revoke = revoke && item->canDeleteForEveryone(now);
+			}
+		}
+	}
+	if (list.empty()) {
+		lua_pushinteger(L, 0);
+		return 1;
+	}
+	const auto count = int(list.size());
+	crl::on_main(session, [=] {
+		session->data().histories().deleteMessages(list, revoke);
+		session->data().sendHistoryChangeNotifications();
+	});
+	lua_pushinteger(L, count);
+	return 1;
+}
+
+int Plugin::ApiGetMessage(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermMessagesRead);
+	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
+	const auto msgId = MsgId(luaL_checkinteger(L, 2));
+	const auto session = ActiveSession();
+	const auto item = session
+		? session->data().message(FullMsgId(peerId, msgId))
+		: nullptr;
+	if (item) {
+		plugin->pushMessage(L, item);
+	} else {
+		lua_pushnil(L); // not loaded: tg.invoke can ask the server
+	}
+	return 1;
+}
+
+int Plugin::ApiPeer(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermChatsRead);
+	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
+	const auto session = ActiveSession();
+	const auto peer = (session && peerId)
+		? session->data().peerLoaded(peerId)
+		: nullptr;
+	if (peer) {
+		plugin->pushPeer(L, peer);
+	} else {
+		lua_pushnil(L);
+	}
+	return 1;
+}
+
+int Plugin::ApiMe(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermChatsRead);
+	if (const auto session = ActiveSession()) {
+		plugin->pushPeer(L, session->user());
+	} else {
+		lua_pushnil(L);
+	}
+	return 1;
+}
+
+int Plugin::ApiCurrentChat(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermChatsRead);
+	const auto controller = ActiveController();
+	const auto peer = controller
+		? controller->activeChatCurrent().peer()
+		: nullptr;
+	if (peer) {
+		lua_pushinteger(L, BotApiId(peer->id));
+	} else {
+		lua_pushnil(L);
+	}
+	return 1;
+}
+
+// Windows.
+
+Plugin::Waiter Plugin::waiter(lua_State *L, int index, const char *what) {
+	auto result = Waiter{
+		.callbackRef = LUA_NOREF,
+		.generation = _generation,
+	};
+	if (lua_isfunction(L, index)) {
+		lua_pushvalue(L, index);
+		result.callbackRef = luaL_ref(L, LUA_REGISTRYINDEX);
+	} else if (_threads.contains(L)) {
+		result.thread = L;
+	} else {
+		luaL_error(
+			L,
+			"%s needs a callback or a tg.async(...) coroutine",
+			what);
+	}
+	return result;
+}
+
+int Plugin::wait(lua_State *L, const Waiter &waiter) {
+	return waiter.thread ? lua_yield(L, 0) : 0;
+}
+
+void Plugin::answer(const Waiter &waiter, Fn<void(lua_State*)> push) {
+	if (waiter.generation != _generation || !_lua) {
+		return;
+	}
+	deliver(waiter.callbackRef, waiter.thread, 1, std::move(push));
+}
+
+int Plugin::ApiAlert(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermUi);
+	const auto text = CheckString(L, 1);
+	const auto title = (lua_type(L, 2) == LUA_TSTRING)
+		? ToString(L, 2)
+		: QString();
+	crl::on_main(plugin, [=] {
+		if (const auto controller = ActiveController()) {
+			auto args = Ui::ConfirmBoxArgs{ .text = text };
+			if (!title.isEmpty()) {
+				args.title = title;
+			}
+			controller->show(Ui::MakeInformBox(std::move(args)));
+		}
+	});
+	return 0;
+}
+
+// tg.ui.confirm("text") or { title, text, ok, cancel } -> true / false
+int Plugin::ApiConfirm(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermUi);
+	auto title = QString();
+	auto text = QString();
+	auto ok = QString();
+	auto cancel = QString();
+	if (lua_type(L, 1) == LUA_TSTRING) {
+		text = ToString(L, 1);
+	} else {
+		luaL_checktype(L, 1, LUA_TTABLE);
+		title = StringField(L, 1, "title");
+		text = StringField(L, 1, "text");
+		ok = StringField(L, 1, "ok");
+		cancel = StringField(L, 1, "cancel");
+	}
+	const auto waiter = plugin->waiter(L, 2, "tg.ui.confirm");
+	const auto weak = base::make_weak(plugin);
+	crl::on_main(plugin, [=] {
+		const auto answered = std::make_shared<bool>(false);
+		const auto finish = [=](bool value) {
+			if (*answered) {
+				return;
+			}
+			*answered = true;
+			if (const auto strong = weak.get()) {
+				strong->answer(waiter, [=](lua_State *L) {
+					lua_pushboolean(L, value ? 1 : 0);
+				});
+			}
+		};
+		const auto controller = ActiveController();
+		if (!controller) {
+			finish(false);
+			return;
+		}
+		const auto okText = ok.isEmpty() ? tr::lng_box_ok(tr::now) : ok;
+		const auto cancelText = cancel.isEmpty()
+			? tr::lng_cancel(tr::now)
+			: cancel;
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			if (!title.isEmpty()) {
+				box->setTitle(title);
+			}
+			box->addRow(object_ptr<Ui::FlatLabel>(box, text, st::boxLabel));
+			box->addButton(rpl::single(okText), [=] {
+				finish(true);
+				box->closeBox();
+			});
+			box->addButton(rpl::single(cancelText), [=] {
+				box->closeBox();
+			});
+			box->boxClosing() | rpl::start_with_next([=] {
+				finish(false);
+			}, box->lifetime());
+		}));
+	});
+	return plugin->wait(L, waiter);
+}
+
+// tg.ui.input{ title, text, value, placeholder, ok, cancel } -> text / nil
+int Plugin::ApiInput(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermUi);
+	luaL_checktype(L, 1, LUA_TTABLE);
+	const auto title = StringField(L, 1, "title");
+	const auto text = StringField(L, 1, "text");
+	const auto value = StringField(L, 1, "value");
+	const auto placeholder = StringField(L, 1, "placeholder");
+	const auto ok = StringField(L, 1, "ok");
+	const auto cancel = StringField(L, 1, "cancel");
+	const auto waiter = plugin->waiter(L, 2, "tg.ui.input");
+	const auto weak = base::make_weak(plugin);
+	crl::on_main(plugin, [=] {
+		const auto answered = std::make_shared<bool>(false);
+		const auto finish = [=](std::optional<QString> result) {
+			if (*answered) {
+				return;
+			}
+			*answered = true;
+			if (const auto strong = weak.get()) {
+				strong->answer(waiter, [=](lua_State *L) {
+					if (result) {
+						PushString(L, *result);
+					} else {
+						lua_pushnil(L);
+					}
+				});
+			}
+		};
+		const auto controller = ActiveController();
+		if (!controller) {
+			finish(std::nullopt);
+			return;
+		}
+		const auto okText = ok.isEmpty() ? tr::lng_box_ok(tr::now) : ok;
+		const auto cancelText = cancel.isEmpty()
+			? tr::lng_cancel(tr::now)
+			: cancel;
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			if (!title.isEmpty()) {
+				box->setTitle(title);
+			}
+			if (!text.isEmpty()) {
+				box->addRow(
+					object_ptr<Ui::FlatLabel>(box, text, st::boxLabel));
+			}
+			const auto field = box->addRow(object_ptr<Ui::InputField>(
+				box,
+				st::defaultInputField,
+				rpl::single(placeholder),
+				value));
+			field->setMaxLength(kMaxInput);
+			box->setFocusCallback([=] {
+				field->setFocusFast();
+			});
+			const auto submit = [=] {
+				finish(field->getLastText());
+				box->closeBox();
+			};
+			field->submits(
+			) | rpl::start_with_next([=](Qt::KeyboardModifiers) {
+				submit();
+			}, field->lifetime());
+			box->addButton(rpl::single(okText), submit);
+			box->addButton(rpl::single(cancelText), [=] {
+				box->closeBox();
+			});
+			box->boxClosing() | rpl::start_with_next([=] {
+				finish(std::nullopt);
+			}, box->lifetime());
+		}));
+	});
+	return plugin->wait(L, waiter);
+}
+
+int Plugin::ApiCopy(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(kPermUi);
+	const auto text = CheckString(L, 1);
+	crl::on_main(plugin, [=] {
+		QGuiApplication::clipboard()->setText(text);
+	});
+	return 0;
 }
 
 } // namespace Plugins::Flua

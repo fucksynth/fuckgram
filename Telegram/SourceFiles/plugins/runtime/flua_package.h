@@ -21,6 +21,8 @@ inline constexpr auto kPermActions = "actions";
 inline constexpr auto kPermDisplay = "display";
 inline constexpr auto kPermChatsRead = "chats.read";
 inline constexpr auto kPermCompose = "compose";
+// Edit and delete messages: tg.messages.edit / tg.messages.delete.
+inline constexpr auto kPermMessagesManage = "messages.manage";
 // Raw MTProto: tg.invoke and the mtproto.* filters. Full account access.
 inline constexpr auto kPermMtproto = "mtproto";
 

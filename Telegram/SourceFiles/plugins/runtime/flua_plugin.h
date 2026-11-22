@@ -140,6 +140,29 @@ private:
 	static int ApiJsonEncode(lua_State *L);
 	static int ApiJsonDecode(lua_State *L);
 	static int ApiInvoke(lua_State *L);
+	static int ApiEditMessage(lua_State *L);
+	static int ApiDeleteMessages(lua_State *L);
+	static int ApiGetMessage(lua_State *L);
+	static int ApiPeer(lua_State *L);
+	static int ApiMe(lua_State *L);
+	static int ApiCurrentChat(lua_State *L);
+	static int ApiAlert(lua_State *L);
+	static int ApiConfirm(lua_State *L);
+	static int ApiInput(lua_State *L);
+	static int ApiCopy(lua_State *L);
+
+	// Where the answer of an async call goes: a callback or the coroutine
+	// that called it. Of an older run it is dropped.
+	struct Waiter {
+		int callbackRef = -2; // LUA_NOREF: no callback
+		lua_State *thread = nullptr;
+		int generation = 0;
+	};
+	// The callback at `index` or the running tg.async coroutine, raises a
+	// Lua error if there is neither.
+	[[nodiscard]] Waiter waiter(lua_State *L, int index, const char *what);
+	int wait(lua_State *L, const Waiter &waiter); // return from the API
+	void answer(const Waiter &waiter, Fn<void(lua_State*)> push);
 	static int RunProtected(lua_State *L);
 
 	struct Timer {
@@ -198,7 +221,8 @@ private:
 	[[nodiscard]] bool accepts(int ref, mtpTypeId method) const;
 	void fail(const QString &error);
 
-	void pushMessage(not_null<HistoryItem*> item);
+	void pushMessage(lua_State *L, not_null<HistoryItem*> item);
+	void pushPeer(lua_State *L, not_null<PeerData*> peer);
 	// Pushes { peer = ..., message = {...} } with what is known.
 	void pushContext(PeerData *peer, HistoryItem *item);
 	void loadSettings();

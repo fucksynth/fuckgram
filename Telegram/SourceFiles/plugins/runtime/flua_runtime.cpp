@@ -106,12 +106,16 @@ void Toast(const QString &text) {
 			"менять, как показаны сообщения и названия чатов");
 	} else if (is(kPermChatsRead)) {
 		return pick(
-			"know which chat or profile is open",
-			"знать, какой чат или профиль открыт");
+			"see chat names and which chat or profile is open",
+			"видеть названия чатов и какой чат или профиль открыт");
 	} else if (is(kPermCompose)) {
 		return pick(
 			"read and replace the text you type",
 			"читать и заменять набираемый текст");
+	} else if (is(kPermMessagesManage)) {
+		return pick(
+			"edit and delete messages",
+			"редактировать и удалять сообщения");
 	} else if (is(kPermMtproto)) {
 		return pick(
 			"⚠ FULL ACCESS TO YOUR ACCOUNT: send any request to Telegram, "

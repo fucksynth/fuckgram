@@ -162,6 +162,7 @@ const std::vector<QString> &KnownPermissions() {
 		QString::fromLatin1(kPermChatsRead),
 		QString::fromLatin1(kPermCompose),
 		QString::fromLatin1(kPermMtproto),
+		QString::fromLatin1(kPermMessagesManage),
 	};
 	return result;
 }
