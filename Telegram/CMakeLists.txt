@@ -3016,6 +3016,10 @@ if (APPLE AND NOT build_macstore)
 endif()
 
 if (WIN32)
+    # Qt 6 Network resolves DNS records through dnsapi: the HTTP of the
+    # plugins, the plugin catalog and the updater pull it in.
+    target_link_libraries(Telegram PRIVATE dnsapi)
+
     # message(${CMAKE_GENERATOR})
     # mt.exe -manifest "${res_loc}/winrc/Telegram.manifest" "-inputresource:\"$<TARGET_FILE:Telegram>\";#1" "-outputresource:\"$<TARGET_FILE:Telegram>\";#1" >NUL
     # set(hash_symbol "#")
