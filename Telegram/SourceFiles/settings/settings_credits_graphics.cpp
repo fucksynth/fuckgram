@@ -19,6 +19,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "boxes/share_box.h"
 #include "boxes/star_gift_box.h"
 #include "boxes/star_gift_craft_box.h"
+#include "boxes/star_gift_onchain_buy_box.h"
+#include "boxes/star_gift_onchain_offer_buy_box.h"
+#include "boxes/star_gift_onchain_sale_box.h"
 #include "boxes/star_gift_resale_box.h"
 #include "boxes/transfer_gift_box.h"
 #include "chat_helpers/stickers_gift_box_pack.h"
@@ -26,6 +29,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "core/application.h"
 #include "core/click_handler_types.h"
 #include "core/click_handler_types.h" // UrlClickHandler
+#include "core/ton_explorer_url.h"
 #include "core/ui_integration.h"
 #include "data/components/credits.h"
 #include "data/components/recent_shared_media_gifts.h"
@@ -89,6 +93,8 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/discrete_sliders.h"
 #include "ui/widgets/fields/number_input.h"
+#include "ui/widgets/menu/menu_add_action_callback.h"
+#include "ui/widgets/menu/menu_add_action_callback_factory.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/labels.h"
 #include "ui/widgets/tooltip.h"
@@ -97,6 +103,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/slide_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/ui_utility.h"
+#include "wallet/wallet_move_to_gifts.h"
 #include "window/window_session_controller.h"
 #include "styles/style_boxes.h"
 #include "styles/style_calls.h"
@@ -282,6 +289,99 @@ void ConvertStarGift(
 	}).send();
 }
 
+[[nodiscard]] bool CanDeleteSavedStarGift(
+		not_null<PeerData*> owner,
+		const Data::SavedStarGift &data) {
+	if (!data.manageId
+		|| data.info.unique
+		|| data.info.limitedCount
+		|| data.info.auction()
+		|| data.refunded) {
+		return false;
+	} else if (const auto chat = data.manageId.chat()) {
+		return (chat == owner)
+			&& owner->isChannel()
+			&& owner->canTransferGifts();
+	}
+	return owner->isSelf() && data.mine;
+}
+
+void DeleteStarGift(
+		std::shared_ptr<ChatHelpers::Show> show,
+		Data::SavedStarGiftId savedId,
+		Fn<void(bool)> done) {
+	const auto session = &show->session();
+	session->api().request(MTPpayments_DeleteStarGift(
+		Api::InputSavedStarGiftId(savedId)
+	)).done([=](const MTPBool &result) {
+		if (!mtpIsTrue(result)) {
+			done(false);
+			return;
+		}
+		session->data().notifyGiftUpdate({
+			.id = savedId,
+			.action = Data::GiftUpdate::Action::Delete,
+		});
+		show->showToast({
+			.text = { tr::lng_gift_deleted(tr::now) },
+			.iconLottie = u"toast/delete"_q,
+			.iconLottieSize = st::toastLottieIconSize,
+		});
+		done(true);
+	}).fail([=](const MTP::Error &error) {
+		if (!MTP::IgnoreError(error)
+			&& !Ui::ShowGiftErrorToast(show, error)) {
+			MTP::ShowErrorFallback(show, error);
+		}
+		done(false);
+	}).send();
+}
+
+void AddDeleteGiftMenuButton(
+		not_null<Ui::GenericBox*> box,
+		std::shared_ptr<ChatHelpers::Show> show,
+		Data::SavedStarGiftId savedId) {
+	const auto weak = base::make_weak(box);
+	const auto busy = box->lifetime().make_state<bool>(false);
+	const auto confirmed = [=](Fn<void()> close) {
+		close();
+		if (!weak || *busy) {
+			return;
+		}
+		*busy = true;
+		DeleteStarGift(show, savedId, crl::guard(weak, [=](bool deleted) {
+			*busy = deleted;
+		}));
+	};
+	const auto confirm = [=] {
+		if (!weak || *busy) {
+			return;
+		}
+		show->show(Ui::MakeConfirmBox({
+			.text = tr::lng_gift_delete_sure_text(),
+			.confirmed = confirmed,
+			.confirmText = tr::lng_box_delete(),
+			.confirmStyle = &st::attentionBoxButton,
+			.title = tr::lng_gift_menu_delete(),
+		}));
+	};
+	const auto fill = [=](not_null<Ui::PopupMenu*> menu) {
+		Ui::Menu::CreateAddActionCallback(menu)({
+			.text = tr::lng_gift_menu_delete(tr::now),
+			.handler = confirm,
+			.icon = &st::menuIconDeleteAttention,
+			.isAttention = true,
+		});
+	};
+	AddUniqueCloseMoreButton(
+		box,
+		{},
+		fill,
+		nullptr,
+		&st::boxTitleClose,
+		&st::regularGiftMenuButton);
+}
+
 void AddViewMediaHandler(
 		not_null<Ui::RpWidget*> thumb,
 		std::shared_ptr<ChatHelpers::Show> show,
@@ -417,6 +517,27 @@ void AddViewMediaHandler(
 	}, [](SmallBalanceForSearch) {
 		return PeerId();
 	});
+}
+
+void PaintLottieIcon(
+		not_null<Ui::RpWidget*> icon,
+		const std::unique_ptr<Lottie::SinglePlayer> &lottie) {
+	auto p = Painter(icon);
+	const auto factor = style::DevicePixelRatio();
+	const auto request = Lottie::FrameRequest{
+		.box = icon->size() * factor,
+	};
+	const auto frame = (lottie && lottie->ready())
+		? lottie->frameInfo(request)
+		: Lottie::Animation::FrameInfo();
+	if (!frame.image.isNull()) {
+		p.drawImage(
+			QRect(QPoint(), frame.image.size() / factor),
+			frame.image);
+		if (lottie->frameIndex() < lottie->framesCount() - 1) {
+			lottie->markFrameShown();
+		}
+	}
 }
 
 } // namespace
@@ -812,6 +933,7 @@ not_null<Ui::RpWidget*> AddBalanceWidget(
 			(state->label.style()->font->height
 				+ state->count.style()->font->height));
 	};
+	resize();
 	std::move(
 		balanceValue
 	) | rpl::on_next([=](CreditsAmount value) {
@@ -1039,7 +1161,8 @@ void ProcessReceivedSubscriptions(
 	return owner
 		&& owner->isUser()
 		&& !owner->isSelf()
-		&& (unique->starsMinOffer >= 0);
+		&& (unique->starsMinOffer >= 0)
+		&& !unique->fixedSale;
 	// Currently we're not making offers for channel gifts.
 	// (owner->isChannel() && !owner->asChannel()->canTransferGifts());
 }
@@ -1163,12 +1286,45 @@ void FillUniqueGiftMenu(
 	if (!unique) {
 		return;
 	}
-	if (unique->canBeTheme) {
+	if (unique->canBeTheme && show->canResolveWindow()) {
 		menu->addAction(tr::lng_gift_transfer_set_theme(tr::now), [=] {
 			if (const auto window = show->resolveWindow()) {
 				SetThemeFromUniqueGift(window, unique);
 			}
 		}, st.theme ? st.theme : &st::menuIconChangeColors);
+	}
+	const auto own = (unique->ownerId == session->userPeerId())
+		? Ui::OwnOnchainGift::None
+		: Ui::LookupOwnOnchainGift(session, *unique);
+	if (Ui::HasOnchainSaleEntries(own)) {
+		const auto listed = (own == Ui::OwnOnchainGift::Listed);
+		const auto editPrice = (listed
+			? tr::lng_gift_transfer_update
+			: tr::lng_gift_transfer_sell)(tr::now);
+		menu->addAction(editPrice, [=] {
+			const auto style = st.giftWearBox
+				? *st.giftWearBox
+				: GiftWearBoxStyleOverride();
+			Ui::ShowUniqueGiftSellBox(
+				show,
+				unique,
+				Data::SavedStarGiftId(),
+				style);
+		}, st.resell ? st.resell : &st::menuIconTagSell);
+		if (listed) {
+			menu->addAction(tr::lng_gift_transfer_unlist(tr::now), [=] {
+				Ui::ShowOwnGiftUnlistBox(
+					show,
+					unique,
+					Data::SavedStarGiftId());
+			}, st.unlist ? st.unlist : &st::menuIconTagRemove);
+		}
+	} else if (Ui::CanOfferOnchainGift(session, *unique)) {
+		const auto count = e.limitedCount;
+		const auto left = e.limitedLeft;
+		menu->addAction(tr::lng_gift_offer_button(tr::now), [=] {
+			Ui::ShowOnchainGiftOfferBox(show, unique, count, left);
+		}, st.offer ? st.offer : &st::menuIconEarn);
 	}
 	const auto owner = unique->ownerId
 		? show->session().data().peer(unique->ownerId).get()
@@ -1185,9 +1341,6 @@ void FillUniqueGiftMenu(
 			if (Ui::ShowCraftLaterError(show, unique)) {
 				return;
 			}
-			if (Ui::ShowCraftAddressError(show, unique)) {
-				return;
-			}
 			const auto savedId = EntryToSavedStarGiftId(&show->session(), e);
 			if (const auto window = show->resolveWindow()) {
 				Ui::ShowGiftCraftInfoBox(window, unique, savedId);
@@ -1198,11 +1351,14 @@ void FillUniqueGiftMenu(
 		&& (savedId.isUser() ? e.in : savedId.chat()->canTransferGifts())
 		&& (unique->starsForTransfer >= 0);
 	if (transfer) {
+		const auto shownOnProfile = e.savedToProfile;
 		menu->addAction(tr::lng_gift_transfer_button(tr::now), [=] {
 			if (!owner) {
-				ShowActionLocked(show, unique->slug);
+				Wallet::ShowAddressHeldGiftTransfer(show, unique, [=] {
+					ShowActionLocked(show, unique->slug);
+				});
 			} else if (const auto window = show->resolveWindow()) {
-				ShowTransferGiftBox(window, unique, savedId);
+				ShowTransferGiftBox(window, unique, savedId, shownOnProfile);
 			}
 		}, st.transfer ? st.transfer : &st::menuIconReplace);
 	}
@@ -1224,9 +1380,14 @@ void FillUniqueGiftMenu(
 			}, st.wear ? st.wear : &st::menuIconNftWear);
 		}
 	}
-	if (ShowResellButton(&show->session(), e)) {
+	if (owner
+		&& (own == Ui::OwnOnchainGift::None)
+		&& ShowResellButton(&show->session(), e)) {
+		if (Ui::HasPendingGiftSale(session, *unique)) {
+			return;
+		}
 		const auto can = CanResellGift(&show->session(), e);
-		const auto inResale = (unique->starsForResale > 0);
+		const auto inResale = Data::UniqueGiftOnSale(*unique);
 		const auto editPrice = (inResale
 			? tr::lng_gift_transfer_update
 			: tr::lng_gift_transfer_sell)(tr::now);
@@ -1242,19 +1403,7 @@ void FillUniqueGiftMenu(
 		}, st.resell ? st.resell : &st::menuIconTagSell);
 		if (inResale) {
 			menu->addAction(tr::lng_gift_transfer_unlist(tr::now), [=] {
-				const auto name = UniqueGiftName(*unique);
-				const auto confirm = [=](Fn<void()> close) {
-					close();
-					Ui::UpdateGiftSellPrice(show, unique, savedId, {});
-				};
-				show->show(Ui::MakeConfirmBox({
-					.text = tr::lng_gift_sell_unlist_sure(),
-					.confirmed = confirm,
-					.confirmText = tr::lng_gift_transfer_unlist(),
-					.title = tr::lng_gift_sell_unlist_title(
-						lt_name,
-						rpl::single(name)),
-				}));
+				Ui::ShowOwnGiftUnlistBox(show, unique, savedId);
 			}, st.unlist ? st.unlist : &st::menuIconTagRemove);
 		}
 	} else if (ShowOfferBuyButton(&show->session(), e)) {
@@ -1284,6 +1433,7 @@ CreditsEntryBoxStyleOverrides DarkCreditsEntryBoxStyle() {
 		.menu = &st::mediaviewPopupMenu,
 		.table = &st::darkGiftTable,
 		.tableValueMultiline = &st::darkGiftTableValueMultiline,
+		.tableValueAddress = &st::darkGiftTableAddress,
 		.tableValueMessage = &st::darkGiftTableMessage,
 		.link = &st::darkGiftLink,
 		.share = &st::darkGiftShare,
@@ -1363,7 +1513,8 @@ void GenericCreditsEntryCover(
 		std::shared_ptr<ChatHelpers::Show> show,
 		const Data::CreditsHistoryEntry &e,
 		const Data::SubscriptionEntry &s,
-		CreditsEntryBoxStyleOverrides st = {}) {
+		CreditsEntryBoxStyleOverrides st = {},
+		std::shared_ptr<const UniqueGiftCoverActions> actions = nullptr) {
 	const auto session = &show->session();
 	const auto owner = &session->data();
 	const auto isStarGift = e.stargift || e.soldOutInfo;
@@ -1427,12 +1578,19 @@ void GenericCreditsEntryCover(
 				ShowUniqueGiftSellBox(show, e.uniqueGift, savedId, wearSt);
 			}
 			: Fn<void()>();
+		auto coverActions = std::vector<Ui::UniqueGiftCoverAction>();
+		if (actions && actions->extra) {
+			for (auto &action : actions->extra(box)) {
+				coverActions.push_back(std::move(action));
+			}
+		}
 		AddUniqueGiftCover(content, rpl::single(cover), {
 			.numberText = (uniqueGift->number > 0)
 				? rpl::single(u"#"_q + Lang::FormatCountDecimal(uniqueGift->number))
 				: rpl::producer<QString>(),
 			.resalePrice = UniqueGiftResalePrice(e.uniqueGift, forceTon),
 			.resaleClick = resaleClick,
+			.actions = std::move(coverActions),
 			.message = std::move(message),
 		});
 		if (e.bareGiftOwnerId == session->userPeerId().value) {
@@ -1527,23 +1685,7 @@ void GenericCreditsEntryCover(
 		}
 		icon->paintRequest(
 		) | rpl::on_next([=] {
-			auto p = Painter(icon);
-			const auto &lottie = state->lottie;
-			const auto factor = style::DevicePixelRatio();
-			const auto request = Lottie::FrameRequest{
-				.box = icon->size() * factor,
-			};
-			const auto frame = (lottie && lottie->ready())
-				? lottie->frameInfo(request)
-				: Lottie::Animation::FrameInfo();
-			if (!frame.image.isNull()) {
-				p.drawImage(
-					QRect(QPoint(), frame.image.size() / factor),
-					frame.image);
-				if (lottie->frameIndex() < lottie->framesCount() - 1) {
-					lottie->markFrameShown();
-				}
-			}
+			PaintLottieIcon(icon, state->lottie);
 		}, icon->lifetime());
 		content->sizeValue(
 		) | rpl::on_next([=](const QSize &size) {
@@ -1573,9 +1715,13 @@ void GenericCreditsEntryBox(
 		std::shared_ptr<ChatHelpers::Show> show,
 		const Data::CreditsHistoryEntry &e,
 		const Data::SubscriptionEntry &s,
-		CreditsEntryBoxStyleOverrides st) {
-	GenericCreditsEntryCover(box, show, e, s, st);
+		CreditsEntryBoxStyleOverrides st,
+		std::shared_ptr<const UniqueGiftCoverActions> actions) {
+	GenericCreditsEntryCover(box, show, e, s, st, actions);
 	GenericCreditsEntryBody(box, show, e, s, nullptr, st);
+	if (actions && actions->aboveButtons && e.uniqueGift) {
+		actions->aboveButtons(box);
+	}
 }
 
 void GenericCreditsEntryBody(
@@ -1638,8 +1784,25 @@ void GenericCreditsEntryBody(
 		&& !e.converted
 		&& starGiftSender;
 	const auto canConvert = forConvert && !timeExceeded;
-	const auto inResale = uniqueGift && (uniqueGift->starsForResale > 0);
-	const auto canBuyResold = inResale && (e.bareGiftOwnerId != selfPeerId);
+	const auto inResale = uniqueGift
+		&& ((uniqueGift->starsForResale > 0)
+			|| (uniqueGift->nanoTonForResale > 0));
+	const auto ownOnchain = uniqueGift
+		? Ui::LookupOwnOnchainGift(session, *uniqueGift)
+		: Ui::OwnOnchainGift::None;
+	const auto canBuyResold = inResale
+		&& !Data::UniqueGiftOnchainPurchase(*uniqueGift)
+		&& !(uniqueGift->fixedSale && !uniqueGift->onchainSale)
+		&& (e.bareGiftOwnerId != selfPeerId)
+		&& (ownOnchain == Ui::OwnOnchainGift::None);
+	const auto resaleRecipient = e.bareGiftResaleRecipientId
+		? owner->peer(PeerId(e.bareGiftResaleRecipientId))
+		: session->user();
+	const auto canBuyOnchain = uniqueGift
+		&& Ui::CanBuyOnchainGift(resaleRecipient, *uniqueGift);
+	const auto onchainMemory = canBuyOnchain
+		? box->lifetime().make_state<Ui::OnchainBuyMemory>()
+		: nullptr;
 	const auto &stUser = st::boostReplaceUserpic;
 	const auto isPrize = e.bareGiveawayMsgId > 0;
 	const auto starGiftSticker = (isStarGift && e.bareGiftStickerId)
@@ -1657,11 +1820,16 @@ void GenericCreditsEntryBody(
 		? owner->peer(PeerId(e.barePeerId)).get()
 		: nullptr;
 
-	if (auto savedId = EntryToSavedStarGiftId(session, e)) {
-		session->data().giftUpdates(
+	const auto entryId = EntryToSavedStarGiftId(session, e);
+	const auto slug = uniqueGift ? uniqueGift->slug : QString();
+	if (entryId || !slug.isEmpty()) {
+		owner->giftUpdates(
 		) | rpl::on_next([=](const Data::GiftUpdate &update) {
-			if (update.id == savedId
-				&& update.action != Data::GiftUpdate::Action::ResaleChange) {
+			using Action = Data::GiftUpdate::Action;
+			const auto close = (update.action == Action::ResaleChange)
+				? (update.listingChanged && !slug.isEmpty() && update.slug == slug)
+				: (entryId && update.id == entryId);
+			if (close) {
 				box->closeBox();
 			}
 		}, box->lifetime());
@@ -1675,9 +1843,6 @@ void GenericCreditsEntryBody(
 		const auto craft = canCraft ? [=] {
 			const auto unique = e.uniqueGift;
 			if (Ui::ShowCraftLaterError(show, unique)) {
-				return;
-			}
-			if (Ui::ShowCraftAddressError(show, unique)) {
 				return;
 			}
 			const auto savedId = EntryToSavedStarGiftId(&show->session(), e);
@@ -1982,9 +2147,12 @@ void GenericCreditsEntryBody(
 				st::creditsBoxAbout),
 			style::al_top);
 		about->setClickHandlerFilter([=](const auto &...) {
-			Core::App().iv().openWithIvPreferred(
+			HiddenUrlClickHandler::OpenTranslatedWithIv(
 				session,
-				tr::lng_paid_about_link_url(tr::now));
+				tr::lng_paid_about_link_url,
+				QVariant::fromValue(ClickHandlerContext{
+					.show = show,
+				}));
 			return false;
 		});
 		if (e.giftRefunded) {
@@ -2069,7 +2237,7 @@ void GenericCreditsEntryBody(
 				st::creditsBoxAboutDivider),
 			style::al_top);
 		label->setClickHandlerFilter([=](const auto &...) {
-			UrlClickHandler::Open(TonAddressUrl(session, address));
+			UrlClickHandler::Open(Core::TonExplorerUrl(session, address));
 			return false;
 		});
 	};
@@ -2441,17 +2609,22 @@ void GenericCreditsEntryBody(
 			if (willBusy) {
 				state->confirmButtonBusy = true;
 				send();
-			} else if (canBuyResold) {
-				const auto to = e.bareGiftResaleRecipientId
-					? show->session().data().peer(
-						PeerId(e.bareGiftResaleRecipientId))
-					: show->session().user();
-				ShowBuyResaleGiftBox(
-					show,
-					e.uniqueGift,
-					e.giftResaleForceTon,
-					to,
-					crl::guard(box, [=](bool) { box->closeBox(); }));
+			} else if (canBuyResold || canBuyOnchain) {
+				if (canBuyResold) {
+					ShowBuyResaleGiftBox(
+						show,
+						e.uniqueGift,
+						e.giftResaleForceTon,
+						resaleRecipient,
+						crl::guard(box, [=](bool) { box->closeBox(); }));
+				} else {
+					Ui::ShowBuyOnchainGiftBox(
+						show,
+						e.uniqueGift,
+						resaleRecipient,
+						base::make_weak(onchainMemory),
+						crl::guard(box, [=] { box->closeBox(); }));
+				}
 			} else if (canUpgrade || canGiftUpgrade) {
 				upgrade();
 			} else if (canToggle && !e.savedToProfile) {
@@ -2462,15 +2635,24 @@ void GenericCreditsEntryBody(
 		}, showNextToUpgrade
 			? st::giveawayGiftCodeBoxUpgradeNext
 			: st::giveawayGiftCodeBox.button);
-		if (canBuyResold) {
-			if (uniqueGift->onlyAcceptTon || e.giftResaleForceTon) {
+		if (canBuyResold || canBuyOnchain) {
+			const auto ton = !canBuyResold
+				|| Data::UniqueGiftResaleBuyTon(
+					*uniqueGift,
+					e.giftResaleForceTon);
+			const auto stars = canBuyResold
+				&& (uniqueGift->starsForResale > 0);
+			auto title = tr::lng_gift_buy_resale_button(
+				lt_cost,
+				rpl::single(ton
+					? Data::FormatGiftResaleTon(*uniqueGift)
+					: Data::FormatGiftResaleStars(*uniqueGift)),
+				tr::marked);
+			if (ton && stars) {
 				button->setText(rpl::single(QString()));
 				Ui::SetButtonTwoLabels(
 					button,
-					tr::lng_gift_buy_resale_button(
-						lt_cost,
-						rpl::single(Data::FormatGiftResaleTon(*uniqueGift)),
-						tr::marked),
+					std::move(title),
 					tr::lng_gift_buy_resale_equals(
 						lt_cost,
 						rpl::single(Ui::Text::IconEmoji(
@@ -2481,11 +2663,7 @@ void GenericCreditsEntryBody(
 					st::resaleButtonTitle,
 					st::resaleButtonSubtitle);
 			} else {
-				button->setText(tr::lng_gift_buy_resale_button(
-					lt_cost,
-					rpl::single(Ui::Text::IconEmoji(&st::starIconEmoji).append(
-						Lang::FormatCountDecimal(uniqueGift->starsForResale))),
-					tr::marked));
+				button->setText(std::move(title));
 			}
 		} else if (showNextToUpgrade) {
 			const auto session = &show->session();
@@ -2591,23 +2769,7 @@ void UniqueGiftValueBox(
 	}
 	icon->paintRequest(
 	) | rpl::on_next([=] {
-		auto p = Painter(icon);
-		const auto &lottie = state->lottie;
-		const auto factor = style::DevicePixelRatio();
-		const auto request = Lottie::FrameRequest{
-			.box = icon->size() * factor,
-		};
-		const auto frame = (lottie && lottie->ready())
-			? lottie->frameInfo(request)
-			: Lottie::Animation::FrameInfo();
-		if (!frame.image.isNull()) {
-			p.drawImage(
-				QRect(QPoint(), frame.image.size() / factor),
-				frame.image);
-			if (lottie->frameIndex() < lottie->framesCount() - 1) {
-				lottie->markFrameShown();
-			}
-		}
+		PaintLottieIcon(icon, state->lottie);
 	}, icon->lifetime());
 	content->sizeValue(
 	) | rpl::on_next([=](const QSize &size) {
@@ -2689,7 +2851,8 @@ void UniqueGiftValueBox(
 			style::al_top);
 	};
 
-	if (const auto count = value->forSaleOnTelegram; count > 0) {
+	if (const auto count = value->forSaleOnTelegram
+		; count > 0 && show->canResolveWindow()) {
 		addAvailability(
 			count,
 			tr::lng_gift_value_telegram
@@ -2785,7 +2948,8 @@ void GlobalStarGiftBox(
 		std::shared_ptr<ChatHelpers::Show> show,
 		const Data::StarGift &data,
 		StarGiftResaleInfo resale,
-		CreditsEntryBoxStyleOverrides st) {
+		CreditsEntryBoxStyleOverrides st,
+		std::shared_ptr<const UniqueGiftCoverActions> actions) {
 	const auto selfId = show->session().userPeerId();
 	const auto ownerId = data.unique ? data.unique->ownerId.value : 0;
 	const auto hostId = data.unique ? data.unique->hostId.value : 0;
@@ -2812,7 +2976,8 @@ void GlobalStarGiftBox(
 			.gift = true,
 		},
 		Data::SubscriptionEntry(),
-		st);
+		st,
+		std::move(actions));
 }
 
 Data::CreditsHistoryEntry SavedStarGiftEntry(
@@ -2889,6 +3054,9 @@ void ShowSavedStarGiftBox(
 			controller,
 			std::move(entry),
 			Data::SubscriptionEntry());
+		if (CanDeleteSavedStarGift(owner, data)) {
+			AddDeleteGiftMenuButton(box, controller->uiShow(), data.manageId);
+		}
 	}));
 }
 
@@ -3734,12 +3902,16 @@ void AddUniqueCloseMoreButton(
 		not_null<Ui::GenericBox*> box,
 		Settings::CreditsEntryBoxStyleOverrides st,
 		Fn<void(not_null<Ui::PopupMenu*>)> fillMenu,
-		Fn<void()> launchCraft) {
+		Fn<void()> launchCraft,
+		const style::IconButton *closeSt,
+		const style::IconButton *menuSt) {
 	const auto close = Ui::CreateChild<Ui::IconButton>(
 		box,
-		st::uniqueCloseButton);
+		closeSt ? *closeSt : st::uniqueCloseButton);
 	const auto menu = fillMenu
-		? Ui::CreateChild<Ui::IconButton>(box, st::uniqueMenuButton)
+		? Ui::CreateChild<Ui::IconButton>(
+			box,
+			menuSt ? *menuSt : st::uniqueMenuButton)
 		: nullptr;
 	const auto craft = launchCraft
 		? Ui::CreateChild<Ui::IconButton>(box, st::uniqueCraftButton)

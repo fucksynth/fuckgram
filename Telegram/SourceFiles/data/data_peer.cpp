@@ -207,20 +207,6 @@ PeerData *PeerFromInputMTP(
 	});
 }
 
-UserData *UserFromInputMTP(
-		not_null<Session*> owner,
-		const MTPInputUser &input) {
-	return input.match([&](const MTPDinputUser &data) {
-		const auto user = owner->user(data.vuser_id().v);
-		user->setAccessHash(data.vaccess_hash().v);
-		return user.get();
-	}, [&](const MTPDinputUserSelf &data) {
-		return owner->session().user().get();
-	}, [](const auto &data) {
-		return (UserData*)nullptr;
-	});
-}
-
 Ui::ColorCollectible ParseColorCollectible(
 		const MTPDpeerColorCollectible &data) {
 	return {
@@ -820,7 +806,9 @@ void PeerData::clearBusinessBot() {
 	if (const auto details = _barDetails.get()) {
 		if (details->requestChatDate
 			|| details->paysPerMessage
-			|| !details->phoneCountryCode.isEmpty()) {
+			|| !details->phoneCountryCode.isEmpty()
+			|| details->botInviter
+			|| details->botOwner) {
 			details->businessBot = nullptr;
 			details->businessBotManageUrl = QString();
 		} else {
@@ -863,14 +851,19 @@ void PeerData::saveTranslationDisabled(bool disabled) {
 
 void PeerData::setBarSettings(const MTPPeerSettings &data) {
 	data.match([&](const MTPDpeerSettings &data) {
+		const auto wasSettings = _barSettings.current();
 		const auto wasPaysPerMessage = paysPerMessage();
+		const auto wasBotInviter = botInviter();
+		const auto wasBotOwner = botOwner();
 		if (!data.vbusiness_bot_id()
 			&& !data.vrequest_chat_title()
 			&& !data.vcharge_paid_message_stars()
 			&& !data.vphone_country()
 			&& !data.vregistration_month()
 			&& !data.vname_change_date()
-			&& !data.vphoto_change_date()) {
+			&& !data.vphoto_change_date()
+			&& !data.vbot_inviter_id()
+			&& !data.vbot_owner_id()) {
 			_barDetails = nullptr;
 		} else if (!_barDetails) {
 			_barDetails = std::make_unique<PeerBarDetails>();
@@ -895,6 +888,12 @@ void PeerData::setBarSettings(const MTPPeerSettings &data) {
 				= qs(data.vbusiness_bot_manage_url().value_or_empty());
 			_barDetails->paysPerMessage
 				= data.vcharge_paid_message_stars().value_or_empty();
+			_barDetails->botInviter = data.vbot_inviter_id()
+				? _owner->user(data.vbot_inviter_id()->v).get()
+				: nullptr;
+			_barDetails->botOwner = data.vbot_owner_id()
+				? _owner->user(data.vbot_owner_id()->v).get()
+				: nullptr;
 		}
 		using Flag = PeerBarSetting;
 		setBarSettings((data.is_add_contact() ? Flag::AddContact : Flag())
@@ -917,7 +916,12 @@ void PeerData::setBarSettings(const MTPPeerSettings &data) {
 				: Flag())
 			| (data.is_business_bot_can_reply()
 				? Flag::BusinessBotCanReply
-				: Flag()));
+				: Flag())
+			| (data.vbot_inviter_id() ? Flag::HasBotInviter : Flag()));
+		if (_barSettings.current() == wasSettings
+			&& (wasBotInviter != botInviter() || wasBotOwner != botOwner())) {
+			session().changes().peerUpdated(this, UpdateFlag::BarSettings);
+		}
 		if (wasPaysPerMessage != paysPerMessage()) {
 			session().changes().peerUpdated(
 				this,
@@ -927,6 +931,7 @@ void PeerData::setBarSettings(const MTPPeerSettings &data) {
 }
 
 void PeerData::setBarSettings(PeerBarSettings which) {
+	const auto wasSettings = _barSettings.current();
 	const auto was = hideLinks();
 	_barSettings.set(which);
 	if (was && !hideLinks()) {
@@ -943,6 +948,9 @@ void PeerData::setBarSettings(PeerBarSettings which) {
 			}
 		}
 	}
+	if (_barSettings.current() != wasSettings) {
+		session().changes().peerUpdated(this, UpdateFlag::BarSettings);
+	}
 }
 
 int PeerData::paysPerMessage() const {
@@ -954,7 +962,9 @@ void PeerData::clearPaysPerMessage() {
 		if (details->paysPerMessage) {
 			if (details->businessBot
 				|| details->requestChatDate
-				|| !details->phoneCountryCode.isEmpty()) {
+				|| !details->phoneCountryCode.isEmpty()
+				|| details->botInviter
+				|| details->botOwner) {
 				details->paysPerMessage = 0;
 			} else {
 				_barDetails = nullptr;
@@ -977,6 +987,14 @@ bool PeerData::hideLinks() const {
 	return !settings || (*settings & PeerBarSetting::ReportSpam);
 }
 
+bool PeerData::hideEmojiStatus() const {
+	if (const auto to = migrateTo()) {
+		return to->hideEmojiStatus();
+	}
+	const auto settings = barSettings();
+	return settings && (*settings & PeerBarSetting::ReportSpam);
+}
+
 QString PeerData::requestChatTitle() const {
 	return _barDetails ? _barDetails->requestChatTitle : QString();
 }
@@ -991,6 +1009,14 @@ UserData *PeerData::businessBot() const {
 
 QString PeerData::businessBotManageUrl() const {
 	return _barDetails ? _barDetails->businessBotManageUrl : QString();
+}
+
+UserData *PeerData::botInviter() const {
+	return _barDetails ? _barDetails->botInviter : nullptr;
+}
+
+UserData *PeerData::botOwner() const {
+	return _barDetails ? _barDetails->botOwner : nullptr;
 }
 
 QString PeerData::phoneCountryCode() const {
@@ -1670,6 +1696,9 @@ Data::SavedSublist *PeerData::monoforumSublistFor(
 		PeerId sublistPeerId) const {
 	if (!sublistPeerId) {
 		return nullptr;
+	} else if (isSelf()) {
+		return owner().savedMessages().sublistLoaded(
+			owner().peer(sublistPeerId));
 	} else if (const auto monoforum = this->monoforum()) {
 		return monoforum->sublistLoaded(owner().peer(sublistPeerId));
 	}
@@ -2158,14 +2187,35 @@ void SetTopPinnedMessageId(
 			0);
 		session.saveSettingsDelayed();
 	}
-	session.storage().add(Storage::SharedMediaAddExisting(
-		peer->id,
-		MsgId(0), // topicRootId
-		PeerId(0), // monoforumPeerId
-		Storage::SharedMediaType::Pinned,
+	ApplyPinnedMessageId(
+		peer,
 		messageId,
-		{ messageId, ServerMaxMsgId }));
-	peer->owner().history(peer)->setHasPinnedMessages(true);
+		MsgId(0), // topicRootId
+		PeerId(0)); // monoforumPeerId
+}
+
+void ApplyPinnedMessageId(
+		not_null<PeerData*> peer,
+		MsgId messageId,
+		MsgId topicRootId,
+		PeerId monoforumPeerId) {
+	auto &session = peer->session();
+	if (const auto item = peer->owner().message(peer->id, messageId)) {
+		item->setIsPinned(true);
+		session.storage().add(Storage::SharedMediaAddSlice(
+			peer->id,
+			MsgId(0), // topicRootId
+			PeerId(0), // monoforumPeerId
+			Storage::SharedMediaType::Pinned,
+			{},
+			{ messageId, ServerMaxMsgId }));
+	} else {
+		session.api().requestPinnedMessagesIfNeeded(
+			peer,
+			messageId,
+			topicRootId,
+			monoforumPeerId);
+	}
 }
 
 FullMsgId ResolveTopPinnedId(

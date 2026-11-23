@@ -27,6 +27,8 @@ struct MusicTag {
 	not_null<PeerData*> peer;
 };
 
+// AyuGram: profile music button with the cover (Profile::AyuMusicButton),
+// shown under the profile top bar instead of the upstream music pill.
 rpl::producer<bool> SetupSavedMusic(
 	not_null<Ui::VerticalLayout*> container,
 	not_null<Info::Controller*> controller,

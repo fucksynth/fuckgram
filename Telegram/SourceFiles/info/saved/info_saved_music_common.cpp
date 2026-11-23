@@ -5,6 +5,10 @@ the official desktop application for the Telegram messaging service.
 For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
+// AyuGram: upstream removed this file in 7.4.6 (the profile music became
+// a pill in the top bar, Info::Profile::PillsRow). It is kept for AyuGram's
+// own music button with the cover (Profile::AyuMusicButton), which is shown
+// under the top bar instead of that pill (see info_profile_pills.cpp).
 #include "info/saved/info_saved_music_common.h"
 
 #include "data/data_peer.h"

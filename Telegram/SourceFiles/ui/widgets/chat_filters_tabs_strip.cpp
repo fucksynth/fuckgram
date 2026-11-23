@@ -53,7 +53,9 @@ struct State final {
 	Ui::Animations::Simple animation;
 	std::optional<FilterId> lastFilterId = std::nullopt;
 	rpl::lifetime rebuildLifetime;
+	rpl::lifetime titleIconsLifetime;
 	rpl::lifetime reorderLifetime;
+	rpl::event_stream<> titleIconResolved;
 	base::unique_qptr<Ui::PopupMenu> menu;
 
 	Api::RemoveComplexChatFilter removeApi;
@@ -61,6 +63,7 @@ struct State final {
 
 	std::unique_ptr<Ui::ChatsFiltersTabsReorder> reorder;
 	bool ignoreRefresh = false;
+	bool ignoreActivation = false;
 };
 
 void ShowMenu(
@@ -106,12 +109,6 @@ void ShowMenu(
 			.isAttention = true,
 		});
 	} else {
-		MarkAsReadMenu::AddChatListAction(
-			controller,
-			MarkAsReadMenu::ChatListKind::AllChats,
-			[=] { return session->data().chatsList(); },
-			addAction);
-
 		auto openFiltersSettings = [=] {
 			const auto filters = &session->data().chatsFilters();
 			if (filters->suggestedLoaded()) {
@@ -129,6 +126,12 @@ void ShowMenu(
 			tr::lng_filters_setup_menu(tr::now),
 			std::move(openFiltersSettings),
 			&st::menuIconEdit);
+
+		MarkAsReadMenu::AddChatListAction(
+			controller,
+			MarkAsReadMenu::ChatListKind::AllChats,
+			[=] { return session->data().chatsList(); },
+			addAction);
 	}
 	if (state->menu->empty()) {
 		state->menu = nullptr;
@@ -396,24 +399,56 @@ not_null<Ui::RpWidget*> AddChatFiltersTabsStrip(
 			return On(PowerSaving::kEmojiChat)
 				|| controller->isGifPausedAtLeastFor(pauseLevel);
 		};
-		const auto sectionsChanged = slider->setSectionsAndCheckChanged(
-			ranges::views::all(
-				list
-			) | ranges::views::transform([](const Data::ChatFilter &filter) {
-				auto title = filter.title();
-				return title.text.empty()
-					? TextWithEntities{ tr::lng_filters_all_short(tr::now) }
-					: title.isStatic
-					? Data::ForceCustomEmojiStatic(title.text)
-					: title.text;
-			}) | ranges::to_vector, context, paused);
-		slider->setSectionIcons(ranges::views::all(
-			list
-		) | ranges::views::transform([](const Data::ChatFilter &filter) {
-			return LookupFilterIcon(filter.id()
+		const auto withIcons = HorizontalChatsFiltersTabsMode(
+			Core::App().settings().chatFiltersTabsMode()
+		) != ChatsFiltersTabsMode::TextOnly;
+		state->titleIconsLifetime.destroy();
+		auto titles = std::vector<TextWithEntities>();
+		auto icons = std::vector<ChatsFiltersTabs::SectionIcon>();
+		titles.reserve(list.size());
+		icons.reserve(list.size());
+		const auto refreshIcons = [=] {
+			state->titleIconResolved.fire({});
+		};
+		const auto allChats = tr::lng_filters_all_short(tr::now);
+		using Data::ForceCustomEmojiStatic;
+		for (const auto &filter : list) {
+			auto title = filter.title();
+			const auto titleIcon = (withIcons && filter.id())
+				? ResolveFilterTitleIcon(
+					session,
+					filter,
+					title,
+					slider,
+					state->titleIconsLifetime,
+					refreshIcons)
+				: FilterTitleIcon();
+			auto label = title.empty()
+				? tr::marked(allChats)
+				: FilterTitleWithoutIcon(
+					std::move(title.text),
+					titleIcon);
+			titles.push_back(title.isStatic
+				? ForceCustomEmojiStatic(std::move(label))
+				: std::move(label));
+			const auto fallback = LookupFilterIcon(filter.id()
 				? ComputeFilterIcon(filter)
 				: FilterIcon::All).tabs.get();
-		}) | ranges::to_vector);
+			icons.push_back({
+				fallback,
+				MakeFilterEmojiIcon(
+					slider,
+					titleIcon,
+					title.isStatic,
+					paused),
+			});
+		}
+		const auto sectionsChanged
+			= slider->setSectionsAndCheckChanged(
+				std::move(titles),
+				context,
+				paused);
+		slider->setSectionIcons(std::move(icons));
 		if (!sectionsChanged) {
 			return;
 		}
@@ -479,7 +514,9 @@ not_null<Ui::RpWidget*> AddChatFiltersTabsStrip(
 				const auto &list = session->data().chatsFilters().list();
 				for (auto i = 0; i < list.size(); ++i) {
 					if (list[i].id() == id) {
+						state->ignoreActivation = true;
 						slider->setActiveSection(i);
+						state->ignoreActivation = false;
 						scrollToIndex(i, anim::type::normal);
 						break;
 					}
@@ -499,7 +536,9 @@ not_null<Ui::RpWidget*> AddChatFiltersTabsStrip(
 				state->lastFilterId = filter.id();
 				scrollToIndex(index, anim::type::normal);
 			}
-			applyFilter(filter);
+			if (!state->ignoreActivation) {
+				applyFilter(filter);
+			}
 		}, state->rebuildLifetime);
 		slider->contextMenuRequested() | rpl::on_next([=](int index) {
 			if (trackActiveFilterAndUnreadAndReorder) {
@@ -523,9 +562,12 @@ not_null<Ui::RpWidget*> AddChatFiltersTabsStrip(
 		session->data().chatsFilters().changed(),
 		Data::AmPremiumValue(session) | rpl::to_empty
 	) | rpl::on_next(rebuild, wrap->lifetime());
+	state->titleIconResolved.events(
+	) | rpl::on_next(rebuild, wrap->lifetime());
 	Core::App().settings().chatFiltersTabsModeValue(
 	) | rpl::on_next([=](ChatsFiltersTabsMode mode) {
 		slider->setTabsMode(HorizontalChatsFiltersTabsMode(mode));
+		rebuild();
 		scrollToIndex(slider->activeSection(), anim::type::instant);
 	}, wrap->lifetime());
 	rebuild();

@@ -19,9 +19,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/profile/tabs/adapters/info_profile_tab_saved.h"
 #include "info/profile/tabs/adapters/info_profile_tab_stories.h"
 #include "info/profile/tabs/info_profile_tabs_host.h"
+#include "info/profile/info_profile_bot_media_previews.h"
 #include "info/profile/info_profile_icon.h"
 #include "info/profile/info_profile_members.h"
-#include "info/profile/info_profile_music_button.h"
 #include "info/profile/info_profile_shared_media_classic.h"
 #include "info/profile/info_profile_top_bar.h"
 #include "info/profile/info_profile_actions.h"
@@ -29,22 +29,18 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "info/saved/info_saved_music_widget.h"
 #include "data/data_changes.h"
 #include "data/data_channel.h"
-#include "data/data_document.h"
 #include "data/data_forum_topic.h"
 #include "data/data_peer.h"
 #include "data/data_photo.h"
 #include "data/data_file_origin.h"
 #include "data/data_user.h"
-#include "data/data_saved_music.h"
 #include "data/data_saved_sublist.h"
-#include "info/saved/info_saved_music_common.h"
 #include "info_profile_actions.h"
 #include "main/main_session.h"
 #include "apiwrap.h"
 #include "api/api_peer_photo.h"
 #include "lang/lang_keys.h"
 #include "ui/text/custom_emoji_helper.h"
-#include "ui/text/format_song_document_name.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/labels.h"
@@ -53,6 +49,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/wrap/fade_wrap.h"
 #include "ui/wrap/vertical_layout.h"
 #include "ui/wrap/slide_wrap.h"
+#include "ui/new_badges.h"
 #include "ui/painter.h"
 #include "ui/vertical_list.h"
 #include "ui/ui_utility.h"
@@ -60,6 +57,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "info/saved/info_saved_music_common.h"
 
 
 namespace Info {
@@ -80,6 +78,7 @@ constexpr auto kMembersInlineMax = 5;
 	}) | rpl::take(1);
 }
 
+// AyuGram: own music button with the cover instead of the upstream pill.
 void AddSavedMusic(
 		not_null<Ui::VerticalLayout*> layout,
 		not_null<Controller*> controller,
@@ -115,32 +114,7 @@ void AddUnofficialSecurityRiskWarning(
 		}
 		if (user->unofficialSecurityRisk()) {
 			auto helper = Ui::Text::CustomEmojiHelper();
-			auto icon = helper.paletteDependent({
-				.factory = [] {
-					const auto s = st::infoSecurityRiskIconSize;
-					const auto ratio = style::DevicePixelRatio();
-					const auto rect = QRect(0, 0, s, s);
-					auto result = QImage(
-						rect.size() * ratio,
-						QImage::Format_ARGB32_Premultiplied);
-					result.setDevicePixelRatio(ratio);
-					result.fill(Qt::transparent);
-
-					auto p = QPainter(&result);
-					auto hq = PainterHighQualityEnabler(p);
-					p.setPen(Qt::NoPen);
-					p.setBrush(st::attentionButtonFg);
-					p.drawEllipse(rect);
-
-					p.setPen(st::windowFgActive);
-					p.setFont(st::semiboldFont);
-					p.drawText(rect, u"!"_q, style::al_center);
-
-					p.end();
-					return result;
-				},
-				.margin = st::infoSecurityRiskIconMargin,
-			});
+			auto icon = helper.paletteDependent(Ui::AttentionMarkEmoji());
 			auto label = object_ptr<Ui::FlatLabel>(
 				content,
 				tr::lng_profile_unofficial_warning(
@@ -215,6 +189,7 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 	auto result = object_ptr<Ui::VerticalLayout>(parent);
 
 	if (!_savedMessages) {
+		// AyuGram: own music button under the top bar.
 		const auto musicPeer = _sublist
 			? _sublist->sublistPeer().get()
 			: _peer.get();
@@ -228,15 +203,20 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 		}
 	}
 
-	auto stack = SectionStack(result.data());
+	const auto skip = st::infoProfileSkip;
+	Ui::AddSkip(result.data(), skip);
+	auto blocks = Ui::VerticalBlocks(result.data(), {
+		.skip = skip,
+		.duration = st::infoSlideDuration,
+	});
 	if (_topic && _topic->creating()) {
-		stack.finalize();
+		Ui::AddSkip(result.data(), skip);
 		return result;
 	}
 
 	if (!_savedMessages) {
-		BuildProfileDetailsSections(
-			stack,
+		AddDetailsBlocks(
+			blocks,
 			_controller,
 			_peer,
 			_topic,
@@ -245,7 +225,8 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 	}
 
 	const auto thirdColumn = (_controller->wrap() == Wrap::Side);
-	const auto tabs = UseProfileMediaTabs() && !thirdColumn;
+	const auto bot = (_topic || _sublist) ? nullptr : _peer->asBot();
+	const auto tabs = bot || (UseProfileMediaTabs() && !thirdColumn);
 	auto sharedTracker = Ui::MultiSlideTracker();
 	if (!tabs) {
 		auto sharedMediaWidget = SetupSharedMediaClassic(
@@ -258,11 +239,8 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 			sharedTracker);
 		const auto raw = sharedMediaWidget.data();
 		_sharedMediaWrap = raw;
-		stack.addPlainSeparator();
-		stack.add(Section{
-			.widget = std::move(sharedMediaWidget),
-			.shown = raw->toggledValue(),
-		});
+		blocks.addSeparator();
+		blocks.add(std::move(sharedMediaWidget));
 	}
 
 	const auto addTabsHost = [&] {
@@ -273,9 +251,12 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 			? _sublist->sublistPeer()->id
 			: PeerId();
 		auto tabs = std::vector<MediaTabDescriptor>();
+		if (bot) {
+			tabs.push_back(MakeBotMediaPreviewsTab(bot));
+		}
 		const auto countValue = [&](Storage::SharedMediaType type) {
 			return SharedMediaCountValue(
-				tabsPeer,
+				_peer,
 				topicRootId,
 				monoforumPeerId,
 				_migrated,
@@ -315,9 +296,9 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 		}
 		if (!_topic && !_savedMessages) {
 			tabs.push_back(MakeStoriesTabDescriptor(tabsPeer));
-			if (!_sublist) {
-				tabs.push_back(MakeGiftsTabDescriptor(_peer));
-			}
+		}
+		if (!_topic && !_savedMessages && !_sublist) {
+			tabs.push_back(MakeGiftsTabDescriptor(_peer));
 		}
 		if ((_peer->isChat() || _peer->isMegagroup())
 			&& !_peer->isMonoforum()
@@ -334,12 +315,8 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 		addTab(Storage::SharedMediaType::File);
 		addTab(Storage::SharedMediaType::Link);
 		addTab(Storage::SharedMediaType::MusicFile);
-		tabs.push_back(MakePollsTabDescriptor(SharedMediaCountValue(
-			tabsPeer,
-			topicRootId,
-			monoforumPeerId,
-			_migrated,
-			Storage::SharedMediaType::Poll) | rpl::map(_1 > 0)));
+		tabs.push_back(MakePollsTabDescriptor(
+			countValue(Storage::SharedMediaType::Poll) | rpl::map(_1 > 0)));
 		addTab(Storage::SharedMediaType::RoundVoiceFile);
 		addTab(Storage::SharedMediaType::GIF);
 		if (!_topic && !_sublist && !_savedMessages) {
@@ -376,11 +353,8 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 				(request.ymax < 0) ? -1 : (request.ymax + shift),
 			});
 		}, raw->lifetime());
-		stack.addPlainSeparator();
-		stack.add(Section{
-			.widget = std::move(tabsHost),
-			.shown = raw->heightValue() | rpl::map(_1 > 0),
-		});
+		blocks.addSeparator();
+		blocks.add(std::move(tabsHost));
 	};
 	if (_topic || _sublist || _savedMessages) {
 		if (tabs) {
@@ -391,28 +365,16 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 				_tabsDocked = true;
 			}
 		}
-		stack.finalize();
+		Ui::AddSkip(result.data(), skip);
 		return result;
 	}
-	if (auto manage = SetupChannelMembersAndManage(
-			_controller,
-			result.data(),
-			_peer)) {
-		const auto raw = static_cast<Ui::SlideWrap<Ui::RpWidget>*>(
-			manage.data());
-		stack.addPlainSeparator();
-		stack.add(Section{
-			.widget = std::move(manage),
-			.shown = raw->toggledValue(),
-		});
-	}
-	if (auto actions = SetupActions(_controller, result.data(), _peer)) {
-		stack.addPlainSeparator();
-		stack.add(Section{
-			.widget = std::move(actions),
-			.shown = rpl::single(true),
-		});
-	}
+	blocks.addSeparator();
+	blocks.add(SetupChannelMembersAndManage(
+		_controller,
+		result.data(),
+		_peer));
+	blocks.addSeparator();
+	AddActionsBlocks(blocks, _controller, _peer);
 	if ((_peer->isChat() || _peer->isMegagroup())
 		&& !_peer->isMonoforum()) {
 		auto shown = [&]() -> rpl::producer<bool> {
@@ -423,17 +385,17 @@ object_ptr<Ui::RpWidget> InnerWidget::setupContent(
 				return !inTab;
 			});
 		}();
-		stack.addPlainSeparator();
-		stack.add(makeMembersSection(result.data(), std::move(shown)));
+		blocks.addSeparator();
+		blocks.add(makeMembersPart(result.data(), std::move(shown)));
 	}
 	if (tabs) {
 		addTabsHost();
 	}
-	stack.finalize();
+	Ui::AddSkip(result.data(), skip);
 	return result;
 }
 
-Section InnerWidget::makeMembersSection(
+Ui::VerticalBlocks::Part InnerWidget::makeMembersPart(
 		not_null<QWidget*> parent,
 		rpl::producer<bool> shown) {
 	auto wrap = object_ptr<Ui::SlideWrap<Ui::VerticalLayout>>(
@@ -470,7 +432,7 @@ Section InnerWidget::makeMembersSection(
 			*toggled = (count > 0);
 		}, _members->lifetime());
 	}, raw->lifetime());
-	return Section{
+	return {
 		.widget = std::move(wrap),
 		.shown = raw->toggledValue(),
 	};
@@ -577,18 +539,22 @@ bool InnerWidget::hasFlexibleTopBar() const {
 
 base::weak_qptr<Ui::RpWidget> InnerWidget::createPinnedToTop(
 		not_null<Ui::RpWidget*> parent) {
+	const auto shown = _sublist ? _sublist->sublistPeer().get() : _peer.get();
 	const auto content = Ui::CreateChild<TopBar>(
 		parent,
 		TopBar::Descriptor{
 			.controller = _controller->parentController(),
 			.key = _controller->key(),
 			.wrap = _controller->wrapValue(),
-			.peer = _sublist ? _sublist->sublistPeer().get() : nullptr,
+			.peer = _sublist ? shown : nullptr,
 			.backToggles = _backToggles.value(),
 			.showFinished = _showFinished.events(),
 			.customStatus = (_savedMessages
 				? SavedChatsCountStatus(&_peer->session())
 				: rpl::producer<TextWithEntities>()),
+			.showSavedMusic = [controller = _controller, shown] {
+				controller->showSection(Info::Saved::MakeMusic(shown));
+			},
 		});
 	content->backRequest(
 	) | rpl::start_to_stream(_backClicks, content->lifetime());
@@ -609,7 +575,7 @@ base::weak_qptr<Ui::RpWidget> InnerWidget::createPinnedToTop(
 				members->setGroupByRole(grouped);
 			}));
 	}
-	_topBarColor = content->edgeColor();
+	_topBarColor = content->edgeColor(); // AyuGram
 	_topBar = content;
 	return base::make_weak(not_null<Ui::RpWidget*>{ content });
 }

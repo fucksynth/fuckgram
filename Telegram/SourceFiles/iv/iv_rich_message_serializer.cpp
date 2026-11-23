@@ -163,6 +163,7 @@ struct SerializeBlockResult {
 	case EntityType::Email: return 18;
 	case EntityType::Phone: return 19;
 	case EntityType::BankCard: return 20;
+	case EntityType::TonAddress: return 21;
 	case EntityType::Invalid:
 	case EntityType::Semibold:
 	case EntityType::MediaTimestamp:
@@ -471,6 +472,7 @@ bool CollectUser(SerializeContext *context, uint64 userId) {
 	case EntityType::Email:
 	case EntityType::Phone:
 	case EntityType::BankCard:
+	case EntityType::TonAddress:
 		return *inner;
 	case EntityType::CustomUrl: {
 		const auto data = entity.data();
@@ -1400,6 +1402,11 @@ void TrimEmptyParagraphEdges(std::vector<Block> *blocks) {
 					*caption))
 				: FailedSerializeBlock();
 		}
+		using Flag = MTPDpageBlockBlockquoteBlocks::Flag;
+		auto flags = MTPDpageBlockBlockquoteBlocks::Flags();
+		if (block.collapsed) {
+			flags |= Flag::f_collapsed;
+		}
 		auto blocks = QVector<MTPPageBlock>();
 		if (HasRichTextContent(block.text)
 			&& !AppendSerializedParagraphBlock(
@@ -1420,6 +1427,7 @@ void TrimEmptyParagraphEdges(std::vector<Block> *blocks) {
 			context);
 		return caption
 			? SuccessfulSerializeBlock(MTP_pageBlockBlockquoteBlocks(
+				MTP_flags(flags),
 				MTP_vector<MTPPageBlock>(std::move(blocks)),
 				*caption))
 			: FailedSerializeBlock();
