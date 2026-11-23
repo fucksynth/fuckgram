@@ -268,8 +268,10 @@ private:
 	QImage _icon;
 	Ui::Text::String _name;
 	Ui::Text::String _meta;
-	Ui::Text::String _description;
-	Ui::Text::String _status;
+	// Without a minimum resize width a String counts its height as if it
+	// never wraps, while it does wrap when drawn.
+	Ui::Text::String _description = { 1 };
+	Ui::Text::String _status = { 1 };
 	bool _statusIsError = false;
 	std::vector<Badge> _badges;
 	std::unique_ptr<Ui::ToggleView> _toggle;

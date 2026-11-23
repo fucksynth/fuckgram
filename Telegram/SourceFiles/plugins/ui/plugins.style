@@ -67,6 +67,7 @@ pluginsInstallIconSize: 72px;
 pluginsInstallIconRadius: 18px;
 pluginsInstallIconTop: 8px;
 pluginsInstallName: FlatLabel(defaultFlatLabel) {
+	minWidth: 160px;
 	textFg: windowBoldFg;
 	align: align(top);
 	style: TextStyle(defaultTextStyle) {
@@ -74,6 +75,7 @@ pluginsInstallName: FlatLabel(defaultFlatLabel) {
 	}
 }
 pluginsInstallMeta: FlatLabel(defaultFlatLabel) {
+	minWidth: 160px;
 	textFg: windowSubTextFg;
 	align: align(top);
 }
@@ -81,6 +83,7 @@ pluginsInstallText: FlatLabel(defaultFlatLabel) {
 	minWidth: 260px;
 }
 pluginsInstallSection: FlatLabel(defaultFlatLabel) {
+	minWidth: 160px;
 	textFg: windowSubTextFg;
 	style: TextStyle(defaultTextStyle) {
 		font: font(12px);
