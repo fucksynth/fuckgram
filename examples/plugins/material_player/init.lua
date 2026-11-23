@@ -351,7 +351,14 @@ local function tick()
 	end
 end
 
-tg.timer.every(100, tick)
+-- 20 frames a second while the wave moves, 4 otherwise. Repeating timers
+-- are 100 ms at least, so each frame plans the next one.
+local function loop()
+	local moving = state and state.playing and setting("wave", true)
+	tg.timer.after(moving and 50 or 250, loop)
+	tick()
+end
+loop()
 
 -- Settings page.
 

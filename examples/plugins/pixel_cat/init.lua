@@ -276,7 +276,14 @@ local function tick()
 	overlay:update()
 end
 
-tg.timer.every(40, tick)
+-- 25 frames a second. Repeating timers are 100 ms at least, so the next
+-- frame is planned by the current one; the next is planned first, so a
+-- failed frame does not stop the cat.
+local function loop()
+	tg.timer.after(40, loop)
+	tick()
+end
+loop()
 
 local function call_cat()
 	local ww, wh = tg.ui.window_size()
