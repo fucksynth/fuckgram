@@ -237,8 +237,15 @@ public:
 		bool engineRuns,
 		CardCallbacks callbacks);
 
+	// Everything but the state is the same: the card can be updated.
+	[[nodiscard]] static QString LookKey(const PluginView &view);
+
+	// Updates the state (on/off, running, error) without building again.
+	void setState(PluginView view, bool engineRuns);
+
 protected:
 	int resizeGetHeight(int newWidth) override;
+	void resizeEvent(QResizeEvent *e) override;
 	void paintEvent(QPaintEvent *e) override;
 	void mouseMoveEvent(QMouseEvent *e) override;
 	void mousePressEvent(QMouseEvent *e) override;
@@ -247,13 +254,16 @@ private:
 	[[nodiscard]] int textLeft() const;
 	[[nodiscard]] QRect toggleRect() const;
 	[[nodiscard]] QRect toggleArea() const;
+	void refreshState();
 	void addAction(
 		const style::icon &icon,
 		const style::icon &over,
 		Fn<void()> callback,
 		bool right);
 
-	const PluginView _view;
+	PluginView _view;
+	const bool _compact = false;
+	bool _engineRuns = false;
 	const CardCallbacks _callbacks;
 	QImage _icon;
 	Ui::Text::String _name;
@@ -266,6 +276,7 @@ private:
 	std::vector<not_null<Ui::IconButton*>> _leftActions;
 	std::vector<not_null<Ui::IconButton*>> _rightActions;
 
+	int _layoutWidth = -1;
 	int _headerHeight = 0;
 	int _descriptionTop = 0;
 	int _badgesTop = 0;
@@ -281,6 +292,8 @@ PluginCard::PluginCard(
 	CardCallbacks callbacks)
 : RpWidget(parent)
 , _view(std::move(view))
+, _compact(compact)
+, _engineRuns(engineRuns)
 , _callbacks(std::move(callbacks))
 , _icon(PrepareIcon(
 	_view,
@@ -307,44 +320,12 @@ PluginCard::PluginCard(
 		meta.join(u" · "_q),
 		kPlainTextOptions);
 
-	auto status = QString();
-	if (_view.enabled && !_view.running) {
-		if (!engineRuns) {
-			status = Translated(
-				"Does not run: plugins are off.",
-				"Не запущен: плагины выключены.");
-		} else {
-			status = _view.error.isEmpty()
-				? Translated("Stopped.", "Остановлен.")
-				: (Translated("Stopped: ", "Остановлен: ") + _view.error);
-			_statusIsError = true;
-		}
-	} else if (_view.running && !_view.error.isEmpty()) {
-		status = Translated("Last error: ", "Последняя ошибка: ")
-			+ _view.error;
-		_statusIsError = true;
-	}
-	_status.setText(st::pluginsCardTextStyle, status, kPlainTextOptions);
-
+	refreshState();
 	if (!compact) {
 		_description.setText(
 			st::pluginsCardTextStyle,
 			_view.description,
 			kPlainTextOptions);
-		if (!_view.enabled) {
-			_badges.push_back({
-				Translated("turned off", "выключен"),
-				st::windowSubTextFg->c,
-			});
-		}
-		for (const auto &permission : _view.permissions) {
-			_badges.push_back({
-				ShortPermission(permission),
-				(IsMtproto(permission)
-					? st::attentionButtonFg->c
-					: st::windowActiveTextFg->c),
-			});
-		}
 		if (_callbacks.share) {
 			addAction(
 				st::pluginsActionShare,
@@ -375,6 +356,77 @@ PluginCard::PluginCard(
 		}
 	}
 	setMouseTracking(true);
+}
+
+QString PluginCard::LookKey(const PluginView &view) {
+	auto result = QStringList{
+		view.id,
+		view.name,
+		view.version,
+		view.author,
+		view.description,
+		view.origin,
+		view.dev ? u"dev"_q : QString(),
+		QString::number(view.icon.cacheKey()),
+	};
+	for (const auto &permission : view.permissions) {
+		result.push_back(permission);
+	}
+	return result.join(QChar(0));
+}
+
+void PluginCard::setState(PluginView view, bool engineRuns) {
+	_view = std::move(view);
+	_engineRuns = engineRuns;
+	if (_toggle->checked() != _view.enabled) {
+		_toggle->setChecked(_view.enabled, anim::type::normal);
+	}
+	refreshState();
+	if (width() > 0) {
+		resizeToWidth(width());
+	}
+	update();
+}
+
+void PluginCard::refreshState() {
+	auto status = QString();
+	_statusIsError = false;
+	if (_view.enabled && !_view.running) {
+		if (!_engineRuns) {
+			status = Translated(
+				"Does not run: plugins are off.",
+				"Не запущен: плагины выключены.");
+		} else {
+			status = _view.error.isEmpty()
+				? Translated("Stopped.", "Остановлен.")
+				: (Translated("Stopped: ", "Остановлен: ") + _view.error);
+			_statusIsError = true;
+		}
+	} else if (_view.running && !_view.error.isEmpty()) {
+		status = Translated("Last error: ", "Последняя ошибка: ")
+			+ _view.error;
+		_statusIsError = true;
+	}
+	_status.setText(st::pluginsCardTextStyle, status, kPlainTextOptions);
+
+	_badges.clear();
+	if (_compact) {
+		return;
+	}
+	if (!_view.enabled) {
+		_badges.push_back({
+			Translated("turned off", "выключен"),
+			st::windowSubTextFg->c,
+		});
+	}
+	for (const auto &permission : _view.permissions) {
+		_badges.push_back({
+			ShortPermission(permission),
+			(IsMtproto(permission)
+				? st::attentionButtonFg->c
+				: st::windowActiveTextFg->c),
+		});
+	}
 }
 
 void PluginCard::addAction(
@@ -411,7 +463,20 @@ QRect PluginCard::toggleArea() const {
 	return toggleRect().marginsAdded({ extend, extend, extend, extend });
 }
 
+// Whoever changes the width, the text and the badges are laid out for it.
+void PluginCard::resizeEvent(QResizeEvent *e) {
+	if (width() == _layoutWidth) {
+		return;
+	}
+	const auto height = resizeGetHeight(width());
+	if (height != this->height()) {
+		resize(width(), height);
+	}
+	update();
+}
+
 int PluginCard::resizeGetHeight(int newWidth) {
+	_layoutWidth = newWidth;
 	const auto &padding = st::pluginsCardPadding;
 	const auto inner = std::max(
 		newWidth - padding.left() - padding.right(),
@@ -807,9 +872,15 @@ public:
 
 private:
 	void setupContent();
+	void refresh();
 	void rebuild();
+	[[nodiscard]] std::vector<Flua::PluginView> shownViews() const;
+	[[nodiscard]] QString listKey(
+		const std::vector<Flua::PluginView> &views) const;
 
 	Ui::VerticalLayout *_list = nullptr;
+	std::vector<not_null<Flua::PluginCard*>> _cards;
+	QString _builtKey;
 	QString _query;
 
 };
@@ -890,7 +961,7 @@ void PluginsSection::setupContent() {
 	rebuild();
 	if (host) {
 		host->changes() | rpl::on_next([=] {
-			rebuild();
+			refresh();
 		}, lifetime());
 	}
 	Ui::AddSkip(content);
@@ -898,8 +969,76 @@ void PluginsSection::setupContent() {
 	Ui::ResizeFitChild(this, content);
 }
 
+std::vector<Flua::PluginView> PluginsSection::shownViews() const {
+	auto result = std::vector<Flua::PluginView>();
+	const auto host = Flua::CurrentHost();
+	if (!host) {
+		return result;
+	}
+	const auto query = _query.toLower();
+	for (auto &view : host->pluginViews()) {
+		if (query.isEmpty()
+			|| view.name.toLower().contains(query)
+			|| view.id.contains(query)
+			|| view.description.toLower().contains(query)) {
+			result.push_back(std::move(view));
+		}
+	}
+	return result;
+}
+
+// What the list is built of, except the states the cards update by
+// themselves: when it is the same, nothing is built again.
+QString PluginsSection::listKey(
+		const std::vector<Flua::PluginView> &views) const {
+	const auto host = Flua::CurrentHost();
+	if (!host) {
+		return u"none"_q;
+	}
+	const auto &engine = host->engine();
+	auto parts = QStringList{
+		engine.compact ? u"compact"_q : QString(),
+		engine.safeMode ? u"safe"_q : QString(),
+	};
+	for (const auto &view : views) {
+		parts.push_back(Flua::PluginCard::LookKey(view));
+	}
+	for (const auto &entry : host->invalidViews()) {
+		parts.push_back(entry.origin + QChar(0) + entry.error);
+	}
+	return parts.join(QChar(1));
+}
+
+void PluginsSection::refresh() {
+	const auto host = Flua::CurrentHost();
+	auto views = shownViews();
+	if (!host
+		|| listKey(views) != _builtKey
+		|| views.size() != _cards.size()) {
+		rebuild();
+		return;
+	}
+	const auto &engine = host->engine();
+	const auto runs = engine.enabled && !engine.safeMode;
+	for (auto i = 0, count = int(views.size()); i != count; ++i) {
+		_cards[i]->setState(std::move(views[i]), runs);
+	}
+}
+
 void PluginsSection::rebuild() {
+	// The list keeps its height while it is built again, so the scroll
+	// position does not jump to the top.
+	_list->setMinimumHeight(_list->height());
+	const auto restoreHeight = gsl::finally([&] {
+		_list->setMinimumHeight(0);
+		if (_list->width() > 0) {
+			_list->resizeToWidth(_list->width());
+		}
+	});
 	_list->clear();
+	_cards.clear();
+	auto views = shownViews();
+	_builtKey = listKey(views);
 	const auto host = Flua::CurrentHost();
 	if (!host) {
 		Ui::AddDividerText(
@@ -924,14 +1063,7 @@ void PluginsSection::rebuild() {
 	const auto runs = engine.enabled && !engine.safeMode;
 	const auto controller = this->controller();
 	auto shown = 0;
-	const auto query = _query.toLower();
-	for (auto &view : host->pluginViews()) {
-		if (!query.isEmpty()
-			&& !view.name.toLower().contains(query)
-			&& !view.id.contains(query)
-			&& !view.description.toLower().contains(query)) {
-			continue;
-		}
+	for (auto &view : views) {
 		const auto id = view.id;
 		const auto name = view.name;
 		const auto origin = view.origin;
@@ -951,14 +1083,14 @@ void PluginsSection::rebuild() {
 		} else {
 			callbacks.remove = [=] { ConfirmRemove(controller, id, name); };
 		}
-		_list->add(
+		_cards.push_back(_list->add(
 			object_ptr<Flua::PluginCard>(
 				_list,
 				std::move(view),
 				engine.compact,
 				runs,
 				std::move(callbacks)),
-			st::pluginsCardMargin);
+			st::pluginsCardMargin));
 		++shown;
 	}
 	const auto invalid = host->invalidViews();
@@ -987,9 +1119,6 @@ void PluginsSection::rebuild() {
 			label->setSelectable(true);
 			Ui::AddSkip(_list);
 		}
-	}
-	if (_list->width() > 0) {
-		_list->resizeToWidth(_list->width());
 	}
 }
 
