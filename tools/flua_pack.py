@@ -6,7 +6,9 @@
 
 Checks the same things the client checks before it loads a package:
 manifest.json, id, entry file, known permissions, no native files and
-size limits. A .flua is a plain zip with manifest.json at its root.
+size limits, and the texts in other languages: "localized" in the
+manifest and locales/<language>.json for plugin.t(). A .flua is a plain
+zip with manifest.json at its root.
 """
 import argparse
 import json
@@ -28,11 +30,92 @@ MAX_FILE = 4 * 1024 * 1024
 MAX_TOTAL = 16 * 1024 * 1024
 MAX_FILES = 512
 API_VERSION = 1
+# Language codes as the client gives them: "ru", "en", "pt-br".
+LANGUAGE = r"^[a-z]{2,3}(-[a-z0-9]{2,8})*$"
+LOCALIZED_FIELDS = {"name", "description"}
+PLURAL_FORMS = {"one", "few", "many", "other"}
 
 
 def fail(message):
     print("error: " + message, file=sys.stderr)
     sys.exit(1)
+
+
+def warn(message):
+    print("warning: " + message, file=sys.stderr)
+
+
+def check_localized(manifest):
+    """"localized": { "ru": { "name": "...", "description": "..." } }"""
+    localized = manifest.get("localized")
+    if localized is None:
+        return
+    if not isinstance(localized, dict):
+        fail("localized must be an object of language -> { name, description }")
+    for language, texts in localized.items():
+        if not re.match(LANGUAGE, language):
+            fail("localized: bad language code %r, use lowercase like ru, en, pt-br"
+                 % language)
+        if not isinstance(texts, dict):
+            fail("localized.%s must be an object with name and description" % language)
+        for field, value in texts.items():
+            if not isinstance(value, str):
+                fail("localized.%s.%s must be a string" % (language, field))
+            if field not in LOCALIZED_FIELDS:
+                warn("localized.%s.%s is not used, only name and description are"
+                     % (language, field))
+
+
+def check_locales(root, files):
+    """locales/<language>.json: flat objects of texts for plugin.t()."""
+    locales = {}
+    for relative, full in files:
+        if not relative.startswith("locales/"):
+            continue
+        name = relative[len("locales/"):]
+        if not name.endswith(".json") or "/" in name:
+            warn("plugin.t() reads only locales/<language>.json, not " + relative)
+            continue
+        language = name[:-len(".json")]
+        if not re.match(LANGUAGE, language):
+            fail("%s: bad language code, use lowercase like ru, en, pt-br" % relative)
+        with open(full, encoding="utf-8") as stream:
+            try:
+                strings = json.load(stream)
+            except ValueError as error:
+                fail("%s: %s" % (relative, error))
+        if not isinstance(strings, dict):
+            fail(relative + ": must be an object of key -> text")
+        for key, value in strings.items():
+            if isinstance(value, str):
+                continue
+            if not isinstance(value, dict):
+                fail("%s: %r must be a string or a plural object" % (relative, key))
+            if not value:
+                fail("%s: %r: the plural object is empty" % (relative, key))
+            for form, text in value.items():
+                if form not in PLURAL_FORMS:
+                    fail("%s: %r: unknown plural form %r, use one, few, many, other"
+                         % (relative, key, form))
+                if not isinstance(text, str):
+                    fail("%s: %r.%s must be a string" % (relative, key, form))
+        locales[language] = strings
+    if not locales:
+        return
+    if "en" not in locales:
+        fail("locales/en.json is missing: it is the fallback for every language")
+    keys = set(locales["en"])
+    for language in sorted(locales):
+        if language == "en":
+            continue
+        missing = sorted(keys - set(locales[language]))
+        extra = sorted(set(locales[language]) - keys)
+        if missing:
+            warn("locales/%s.json has no %s (English is shown)"
+                 % (language, ", ".join(missing)))
+        if extra:
+            warn("locales/%s.json has keys that en.json has not: %s"
+                 % (language, ", ".join(extra)))
 
 
 def collect(root):
@@ -86,14 +169,15 @@ def check_manifest(root, files):
         categories = categories + [manifest["category"]]
     for category in categories:
         if str(category).strip().lower() not in KNOWN_CATEGORIES:
-            print("warning: unknown category, the catalog skips it: " + str(category),
-                  file=sys.stderr)
+            warn("unknown category, the catalog skips it: " + str(category))
     for permission in manifest.get("permissions", []):
         if permission.startswith("net:"):
             if not re.match(NET_HOST, permission[4:]):
                 fail("bad network permission: " + permission)
         elif permission not in KNOWN_PERMISSIONS:
             fail("unknown permission: " + permission)
+    check_localized(manifest)
+    check_locales(root, files)
     return manifest
 
 

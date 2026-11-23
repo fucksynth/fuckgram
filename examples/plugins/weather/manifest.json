@@ -1,11 +1,17 @@
 {
     "id": "example.weather",
     "name": "Weather",
-    "version": "1.0",
+    "version": "1.1",
     "author": "fuckgram",
-    "description": "Type /weather <city> in any chat to send the current weather instead.",
+    "description": "Type /weather and a city in any chat to send the current weather instead. The default city, units and the kind of reply are in the settings.",
+    "localized": {
+        "ru": {
+            "name": "Погода",
+            "description": "Напишите в любом чате /weather и город — вместо команды уйдёт текущая погода. Город по умолчанию, единицы и вид ответа — в настройках."
+        }
+    },
     "api": { "min": 1, "max": 1 },
     "entry": "init.lua",
     "categories": ["chats", "fun"],
-    "permissions": ["messages.send", "net:wttr.in"]
+    "permissions": ["messages.send", "ui", "storage", "net:wttr.in"]
 }

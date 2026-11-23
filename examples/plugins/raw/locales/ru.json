@@ -1,0 +1,12 @@
+{
+    "settings.privacy": "Приватность",
+    "settings.hide_typing": "Скрывать «печатает…»",
+    "settings.hide_typing.about": "Другие не видят, что вы набираете текст, записываете голосовое или отправляете файл.",
+    "settings.data_center": "Дата-центр",
+    "settings.dc_command": "Команда /dc",
+    "settings.dc_command.about": "Вместо /dc в чат уходят ваша страна и дата-центр.",
+    "settings.check": "Проверить мой дата-центр",
+    "settings.check.about": "Спрашивает Telegram через help.getNearestDc.",
+    "dc.reply": "Страна: {country}, мой дата-центр: {this_dc}, ближайший: {nearest}",
+    "error.dc": "Telegram не ответил: {1}"
+}

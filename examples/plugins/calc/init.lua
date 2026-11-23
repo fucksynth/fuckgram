@@ -1,6 +1,10 @@
 -- Калькулятор: «2+2*2=» или «/calc 2+2*2» отправляется как «2+2*2 = 6».
 -- Выражение разбирает свой парсер: load() в плагинах нет, и это хорошо —
--- в сообщении не выполнится чужой код.
+-- в сообщении не выполнится чужой код. Разделитель дробной части, число
+-- знаков и вид ответа — на странице настроек.
+
+-- Пример на странице настроек: ответ меняется вместе с настройками.
+local EXAMPLE = "22/7"
 
 local FUNCTIONS = {
 	sqrt = math.sqrt, abs = math.abs, floor = math.floor, ceil = math.ceil,
@@ -155,9 +159,31 @@ local function format(value, comma)
 	if integer and math.abs(value) < 1e15 then
 		result = tostring(integer)
 	else
-		result = string.format("%.10g", value)
+		local digits = math.floor(plugin.settings.get("digits", 10))
+		digits = math.max(1, math.min(digits, 17))
+		result = string.format("%." .. digits .. "g", value)
 	end
 	return comma and result:gsub("%.", ",") or result
+end
+
+-- Запятая или точка: как в выражении, или всегда одна из них.
+local function useComma(expression)
+	local separator = plugin.settings.get("separator", 1)
+	if separator == 2 then
+		return false
+	elseif separator == 3 then
+		return true
+	end
+	return expression:find("%d,%d") ~= nil
+end
+
+-- «2+2*2 = 6» или только «6».
+local function answer(expression, value)
+	local result = format(value, useComma(expression))
+	if plugin.settings.get("result_only", false) then
+		return result
+	end
+	return expression .. " = " .. result
 end
 
 local function hasOperation(text)
@@ -167,7 +193,10 @@ end
 plugin.on("message.send", function(draft)
 	local text = draft.text
 	local command = text:match("^/calc%s+(.+)$")
-	local expression = command or text:match("^(.-)%s*=%s*$")
+	local expression = command
+	if not command and plugin.settings.get("equals", true) then
+		expression = text:match("^(.-)%s*=%s*$")
+	end
 	if not expression or expression == "" then
 		return nil
 	end
@@ -179,11 +208,70 @@ plugin.on("message.send", function(draft)
 	local value = evaluate(expression)
 	if not value then
 		if command then
-			tg.toast("Калькулятор: не понял выражение")
+			tg.toast{ title = plugin.t("title"), text = plugin.t("error.parse") }
 			return false
 		end
 		return nil
 	end
-	local comma = expression:find("%d,%d") ~= nil
-	return expression .. " = " .. format(value, comma)
+	return answer(expression, value)
+end)
+
+-- Страница строится при каждом открытии и после refresh(): пример внизу
+-- показывает ответ с текущими настройками.
+local function refresh()
+	plugin.settings.refresh()
+end
+
+plugin.settings.page(function()
+	return {
+		{ type = "header", text = plugin.t("settings.counting") },
+		{
+			type = "switch",
+			key = "equals",
+			text = plugin.t("settings.equals"),
+			subtext = plugin.t("settings.equals.about"),
+			icon = "edit",
+			default = true,
+		},
+		{
+			type = "switch",
+			key = "result_only",
+			text = plugin.t("settings.result_only"),
+			subtext = plugin.t("settings.result_only.about"),
+			icon = "reply",
+			default = false,
+			on_change = refresh,
+		},
+		{ type = "header", text = plugin.t("settings.numbers") },
+		{
+			type = "selector",
+			key = "separator",
+			text = plugin.t("settings.separator"),
+			items = {
+				plugin.t("settings.separator.auto"),
+				plugin.t("settings.separator.point"),
+				plugin.t("settings.separator.comma"),
+			},
+			default = 1,
+			icon = "font",
+			on_change = refresh,
+		},
+		{
+			type = "slider",
+			key = "digits",
+			text = plugin.t("settings.digits"),
+			min = 3,
+			max = 15,
+			step = 1,
+			default = 10,
+			on_change = refresh,
+		},
+		{
+			type = "text",
+			text = plugin.t("settings.example"),
+			subtext = answer(EXAMPLE, evaluate(EXAMPLE)),
+			icon = "info",
+		},
+		{ type = "divider", text = plugin.t("settings.supported") },
+	}
 end)

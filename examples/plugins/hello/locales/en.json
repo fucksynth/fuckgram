@@ -1,0 +1,20 @@
+{
+    "settings.filter": "Send filter",
+    "settings.shrug": "Replace :shrug:",
+    "settings.shrug.about": "Turns :shrug: in your messages into ¯\\_(ツ)_/¯.",
+    "settings.nope": "Block /nope",
+    "settings.nope.about": "A message that is just /nope is not sent.",
+    "settings.about": "About",
+    "settings.starts": {
+        "one": "Started once",
+        "other": "Started {1} times"
+    },
+    "settings.language": "Interface language: {lang}",
+    "menu.message_id": "Show message ID",
+    "menu.hello": "Say hello",
+    "toast.message_id": "Message {id} in chat {peer}",
+    "toast.hello": {
+        "one": "Hello! I have been started once.",
+        "other": "Hello! I have been started {1} times."
+    }
+}

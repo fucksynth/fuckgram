@@ -1,6 +1,7 @@
 -- Чистые ссылки: перед отправкой убирает из ссылок параметры, по которым
 -- сайты и соцсети следят, откуда пришёл человек. Остальные параметры
--- (номер страницы, поиск, время в видео) остаются как были.
+-- (номер страницы, поиск, время в видео) остаются как были. Из меню
+-- сообщения можно скопировать его текст с уже чистыми ссылками.
 
 -- Параметры, которые убираются на любом сайте.
 local TRACKERS = {
@@ -32,6 +33,9 @@ local BY_SITE = {
 }
 
 local function siteRules(host)
+	if not plugin.settings.get("site_rules", true) then
+		return nil
+	end
 	for site, rules in pairs(BY_SITE) do
 		if host == site or host:sub(-#site - 1) == "." .. site then
 			return rules
@@ -40,8 +44,17 @@ local function siteRules(host)
 	return nil
 end
 
-local function tracked(key, rules)
-	if TRACKERS[key] then
+-- Свои параметры из настроек: «ref, source» -> { ref = true, source = true }.
+local function extraRules()
+	local extra = {}
+	for name in plugin.settings.get("extra", ""):gmatch("[^,;%s]+") do
+		extra[name:lower()] = true
+	end
+	return extra
+end
+
+local function tracked(key, rules, extra)
+	if TRACKERS[key] or extra[key] then
 		return true
 	end
 	for _, prefix in ipairs(PREFIXES) do
@@ -53,7 +66,7 @@ local function tracked(key, rules)
 end
 
 -- Ссылка без меток и сколько их было.
-local function clean(url)
+local function clean(url, extra)
 	local base, query, fragment = url:match("^([^?#]*)%?([^#]*)(.*)$")
 	if not base then
 		return url, 0
@@ -63,7 +76,7 @@ local function clean(url)
 	local kept, removed = {}, 0
 	for pair in query:gmatch("[^&]+") do
 		local key = (pair:match("^([^=]*)") or ""):lower()
-		if tracked(key, rules) then
+		if tracked(key, rules, extra) then
 			removed = removed + 1
 		else
 			kept[#kept + 1] = pair
@@ -79,20 +92,85 @@ local function clean(url)
 	return result .. fragment, removed
 end
 
-plugin.on("message.send", function(draft)
-	local total = 0
-	local text = draft.text:gsub("https?://[^%s<>\"]+", function(url)
+-- Текст с чистыми ссылками, сколько меток убрано и сколько было ссылок.
+local function cleanText(text)
+	local extra = extraRules()
+	local total, links = 0, 0
+	local result = text:gsub("https?://[^%s<>\"]+", function(url)
+		links = links + 1
 		-- Точка или запятая в конце — это конец предложения, не ссылки.
 		local body, tail = url:match("^(.-)([%.,;:!%?]*)$")
-		local cleaned, removed = clean(body)
+		local cleaned, removed = clean(body, extra)
 		total = total + removed
 		return cleaned .. tail
 	end)
+	return result, total, links
+end
+
+local function notify(text)
+	tg.toast{ title = plugin.t("title"), text = text }
+end
+
+plugin.on("message.send", function(draft)
+	local text, total = cleanText(draft.text)
 	if total == 0 then
 		return nil
 	end
-	tg.toast(total == 1
-		and "Чистые ссылки: убрана метка слежки"
-		or ("Чистые ссылки: убрано меток слежки — " .. total))
+	if plugin.settings.get("notify", true) then
+		notify(plugin.t("toast.cleaned", total))
+	end
 	return text
+end)
+
+plugin.menu{
+	place = "message",
+	text = plugin.t("menu.copy"),
+	icon = "link",
+	on_click = function(ctx)
+		local text = ctx.message and ctx.message.text
+		if not text or text == "" then
+			notify(plugin.t("toast.no_text"))
+			return
+		end
+		local cleaned, total, links = cleanText(text)
+		if links == 0 then
+			notify(plugin.t("toast.no_links"))
+			return
+		end
+		tg.ui.copy(cleaned)
+		notify(total > 0
+			and plugin.t("toast.copied", total)
+			or plugin.t("toast.copied_clean"))
+	end,
+}
+
+plugin.settings.page(function()
+	return {
+		{ type = "header", text = plugin.t("settings.header") },
+		{
+			type = "switch",
+			key = "notify",
+			text = plugin.t("settings.notify"),
+			subtext = plugin.t("settings.notify.about"),
+			icon = "bell",
+			default = true,
+		},
+		{
+			type = "switch",
+			key = "site_rules",
+			text = plugin.t("settings.site_rules"),
+			subtext = plugin.t("settings.site_rules.about"),
+			icon = "link",
+			default = true,
+		},
+		{
+			type = "input",
+			key = "extra",
+			text = plugin.t("settings.extra"),
+			subtext = plugin.t("settings.extra.about"),
+			placeholder = plugin.t("settings.extra.placeholder"),
+			icon = "edit",
+		},
+		{ type = "divider", text = plugin.t("settings.kept") },
+	}
 end)

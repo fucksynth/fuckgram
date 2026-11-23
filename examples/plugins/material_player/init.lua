@@ -1,14 +1,13 @@
 -- Плеер Material: карточка в стиле Material 3 поверх окна клиента.
 -- Рисуется на холсте (tg.ui.overlay), читает и нажимает плеер клиента
--- (tg.player). Цвета берутся от названия трека или из темы.
+-- (tg.player). Цвета берутся от названия трека или из темы. Тексты — в
+-- locales/*.json (plugin.t).
 
 local CORNERS = { "bottom-right", "bottom-left", "top-right", "top-left" }
-local CORNER_NAMES = { "Справа снизу", "Слева снизу", "Справа сверху", "Слева сверху" }
 local SIZES = {
-	{ name = "Обычный", width = 340, height = 136 },
-	{ name = "Компактный", width = 300, height = 76 },
+	{ width = 340, height = 136 },
+	{ width = 300, height = 76 },
 }
-local PALETTES = { "По треку", "Цвет темы", "Фиолетовый", "Зелёный", "Оранжевый" }
 local FIXED_HUES = { [3] = 270, [4] = 140, [5] = 28 }
 
 local overlay
@@ -209,7 +208,10 @@ local function paint(c)
 	-- The compact card keeps its buttons on the right of the text.
 	local tw = compact and (w - tx - 116) or (w - tx - 16)
 	local duration = state.duration or 0
-	local title = state.voice and "Голосовое сообщение" or (state.title or "")
+	local title = state.title or ""
+	if state.voice then
+		title = compact and plugin.t("voice.short") or plugin.t("voice")
+	end
 	local subtitle = state.voice
 		and (time_text(state.position) .. " / " .. time_text(duration))
 		or (state.performer or "")
@@ -393,12 +395,12 @@ end
 
 local function settings_page()
 	return {
-		{ type = "header", text = "Отображение" },
+		{ type = "header", text = plugin.t("settings.display") },
 		{
 			type = "switch",
 			key = "enabled",
-			text = "Показывать плеер",
-			subtext = "Карточка появляется, когда играет музыка или голосовое.",
+			text = plugin.t("settings.enabled"),
+			subtext = plugin.t("settings.enabled.about"),
 			icon = "sound",
 			default = true,
 			on_change = rebuild_card,
@@ -406,8 +408,8 @@ local function settings_page()
 		{
 			type = "switch",
 			key = "paused",
-			text = "Оставлять на паузе",
-			subtext = "Иначе карточка прячется, пока трек на паузе.",
+			text = plugin.t("settings.paused"),
+			subtext = plugin.t("settings.paused.about"),
 			icon = "timer",
 			default = true,
 			on_change = rebuild_card,
@@ -415,8 +417,13 @@ local function settings_page()
 		{
 			type = "selector",
 			key = "corner",
-			text = "Угол окна",
-			items = CORNER_NAMES,
+			text = plugin.t("settings.corner"),
+			items = {
+				plugin.t("corner.bottom_right"),
+				plugin.t("corner.bottom_left"),
+				plugin.t("corner.top_right"),
+				plugin.t("corner.top_left"),
+			},
 			default = 1,
 			icon = "expand",
 			on_change = rebuild_card,
@@ -424,18 +431,24 @@ local function settings_page()
 		{
 			type = "selector",
 			key = "size",
-			text = "Размер",
-			items = { SIZES[1].name, SIZES[2].name },
+			text = plugin.t("settings.size"),
+			items = { plugin.t("size.normal"), plugin.t("size.compact") },
 			default = 1,
 			icon = "customize",
 			on_change = rebuild_card,
 		},
-		{ type = "header", text = "Стиль" },
+		{ type = "header", text = plugin.t("settings.style") },
 		{
 			type = "selector",
 			key = "palette",
-			text = "Цвета",
-			items = PALETTES,
+			text = plugin.t("settings.palette"),
+			items = {
+				plugin.t("palette.track"),
+				plugin.t("palette.theme"),
+				plugin.t("palette.purple"),
+				plugin.t("palette.green"),
+				plugin.t("palette.orange"),
+			},
 			default = 1,
 			icon = "palette",
 			on_change = function()
@@ -445,8 +458,8 @@ local function settings_page()
 		{
 			type = "switch",
 			key = "wave",
-			text = "Волнистый прогресс",
-			subtext = "Анимация волны на полосе, пока трек играет.",
+			text = plugin.t("settings.wave"),
+			subtext = plugin.t("settings.wave.about"),
 			icon = "reactions",
 			default = true,
 		},
@@ -458,15 +471,20 @@ local function settings_page()
 				-- through a canvas that moves everything to its place.
 				local real = state
 				state = state or {
-					title = "Название трека",
-					performer = "Исполнитель",
+					title = plugin.t("preview.title"),
+					performer = plugin.t("preview.performer"),
 					playing = true,
 					position = 83,
 					duration = 225,
 				}
 				local w = c:size()
 				local size = size_option()
-				c:text(22, 4, "Так выглядит карточка:", { size = 12, color = "windowSubTextFg" })
+				c:text(22, 4, plugin.t("preview.caption"), {
+					size = 12,
+					color = "windowSubTextFg",
+					width = w - 44,
+					height = 18,
+				})
 				local saved = layout
 				layout = {}
 				paint(shifted(c, math.max((w - size.width) / 2, 0), 26, size.width, size.height))
@@ -474,7 +492,7 @@ local function settings_page()
 				state = real
 			end,
 		},
-		{ type = "divider", text = "Кнопки и полоса прогресса нажимаются прямо на карточке." },
+		{ type = "divider", text = plugin.t("settings.clicks") },
 	}
 end
 
@@ -482,7 +500,7 @@ plugin.settings.page(settings_page)
 
 plugin.menu{
 	place = "main",
-	text = "Плеер Material",
+	text = plugin.t("title"),
 	icon = "sound",
 	page = settings_page,
 }

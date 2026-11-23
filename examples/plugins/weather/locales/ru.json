@@ -1,0 +1,19 @@
+{
+    "title": "Погода",
+    "settings.city": "Город по умолчанию",
+    "settings.city.about": "Для /weather без города и для «Отправить погоду» в меню кнопки отправки.",
+    "settings.city.placeholder": "Например, Москва",
+    "settings.units": "Единицы",
+    "settings.units.metric": "°C, ветер в км/ч",
+    "settings.units.metric_ms": "°C, ветер в м/с",
+    "settings.units.us": "°F, ветер в милях в час",
+    "settings.format": "Ответ",
+    "settings.format.short": "Коротко: небо и температура",
+    "settings.format.wind": "С ветром",
+    "settings.usage": "Напишите в любом чате /weather и город или просто /weather для города по умолчанию. Сама команда не отправляется.",
+    "menu.send": "Отправить погоду",
+    "dialog.text": "В каком городе?",
+    "dialog.send": "Отправить",
+    "error.no_city": "Напишите /weather и город или укажите город по умолчанию в настройках плагина.",
+    "error.request": "Не удалось узнать погоду для «{city}» ({problem})."
+}

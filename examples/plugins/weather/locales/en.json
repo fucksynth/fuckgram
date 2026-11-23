@@ -1,0 +1,19 @@
+{
+    "title": "Weather",
+    "settings.city": "Default city",
+    "settings.city.about": "For /weather without a city and for “Send the weather” in the menu of the send button.",
+    "settings.city.placeholder": "For example, London",
+    "settings.units": "Units",
+    "settings.units.metric": "°C, wind in km/h",
+    "settings.units.metric_ms": "°C, wind in m/s",
+    "settings.units.us": "°F, wind in mph",
+    "settings.format": "Reply",
+    "settings.format.short": "Short: sky and temperature",
+    "settings.format.wind": "With the wind",
+    "settings.usage": "Type /weather and a city in any chat, or just /weather for the default city. The command itself is not sent.",
+    "menu.send": "Send the weather",
+    "dialog.text": "Which city?",
+    "dialog.send": "Send",
+    "error.no_city": "Type /weather and a city, or set the default city in the plugin settings.",
+    "error.request": "Could not get the weather for “{city}” ({problem})."
+}

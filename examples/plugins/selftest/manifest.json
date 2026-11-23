@@ -1,9 +1,15 @@
 {
     "id": "example.selftest",
-    "name": "Self test",
-    "version": "1.0",
+    "name": "Self Test",
+    "version": "1.1",
     "author": "fuckgram",
-    "description": "Checks the plugin API by hand: /t commands in any chat and \"Тест:\" menu items.",
+    "description": "Checks the plugin API by hand: /t commands in any chat, “Test:” menu items and checks on its settings page, the localization among them.",
+    "localized": {
+        "ru": {
+            "name": "Самопроверка",
+            "description": "Проверка API плагинов вручную: команды /t в любом чате, пункты меню «Тест:» и проверки на странице настроек, среди них локализация."
+        }
+    },
     "api": { "min": 1, "max": 1 },
     "entry": "init.lua",
     "categories": ["tools"],

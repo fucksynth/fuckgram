@@ -1,5 +1,6 @@
 -- Пиксельный котик: живёт в окне клиента. Рисуется на холсте плашки
--- (tg.ui.overlay), которая ездит по окну; спрайты — строки ниже.
+-- (tg.ui.overlay), которая ездит по окну; спрайты — строки ниже. Что
+-- котик говорит и как называются окрасы — в locales/*.json (plugin.t).
 
 -- "." пусто, "o" контур, "f" шерсть, "d" полоски, "b" животик,
 -- "e" глаза, "n" нос. Котик смотрит вправо, влево его отражаем.
@@ -59,11 +60,11 @@ local SPRITES = {
 }
 
 local COATS = {
-	{ name = "Рыжий", f = "#f4a259", d = "#d9772b", b = "#ffe2bd", o = "#5a2e0e", e = "#2b2b2b", n = "#ff8fab" },
-	{ name = "Серый", f = "#9aa3ad", d = "#6f7883", b = "#e3e7eb", o = "#2f3a45", e = "#2b2b2b", n = "#ff8fab" },
-	{ name = "Чёрный", f = "#2f2f35", d = "#1d1d22", b = "#4a4a52", o = "#0d0d10", e = "#ffd43b", n = "#ff8fab" },
-	{ name = "Белый", f = "#f4f4f4", d = "#dcdcdc", b = "#ffffff", o = "#7a7a7a", e = "#3b6fd6", n = "#ff8fab" },
-	{ name = "Сиамский", f = "#f1e3cf", d = "#6b4a36", b = "#fff6ea", o = "#3d2a1f", e = "#3b8ad6", n = "#ff8fab" },
+	{ f = "#f4a259", d = "#d9772b", b = "#ffe2bd", o = "#5a2e0e", e = "#2b2b2b", n = "#ff8fab" },
+	{ f = "#9aa3ad", d = "#6f7883", b = "#e3e7eb", o = "#2f3a45", e = "#2b2b2b", n = "#ff8fab" },
+	{ f = "#2f2f35", d = "#1d1d22", b = "#4a4a52", o = "#0d0d10", e = "#ffd43b", n = "#ff8fab" },
+	{ f = "#f4f4f4", d = "#dcdcdc", b = "#ffffff", o = "#7a7a7a", e = "#3b6fd6", n = "#ff8fab" },
+	{ f = "#f1e3cf", d = "#6b4a36", b = "#fff6ea", o = "#3d2a1f", e = "#3b8ad6", n = "#ff8fab" },
 }
 
 local SPRITE_W, SPRITE_H = 16, 11
@@ -178,10 +179,10 @@ end
 
 local function pet()
 	if cat.mode == "sleep" then
-		say("Мр?..")
+		say(plugin.t("say.sleepy"))
 	else
 		local name = setting("name", "")
-		say(name ~= "" and ("Мяу! Я " .. name) or "Мяу!")
+		say(name ~= "" and plugin.t("say.name", name) or plugin.t("say.meow"))
 	end
 	cat.mode = "run"
 	pick_target()
@@ -294,38 +295,44 @@ local function call_cat()
 	cat.tx = (ww - bw) // 2
 	cat.ty = (wh - bh) // 2
 	cat.mode = "run"
-	say("Иду!", 1200)
+	say(plugin.t("say.coming"), 1200)
 end
 
 local function settings_page()
 	return {
-		{ type = "header", text = "Котик" },
+		{ type = "header", text = plugin.t("settings.cat") },
 		{
 			type = "switch",
 			key = "enabled",
-			text = "Котик в окне",
+			text = plugin.t("settings.enabled"),
 			icon = "fave",
 			default = true,
 		},
 		{
 			type = "input",
 			key = "name",
-			text = "Имя",
-			placeholder = "Например, Барсик",
+			text = plugin.t("settings.name"),
+			placeholder = plugin.t("settings.name.placeholder"),
 			icon = "edit",
 		},
 		{
 			type = "selector",
 			key = "coat",
-			text = "Окрас",
-			items = { COATS[1].name, COATS[2].name, COATS[3].name, COATS[4].name, COATS[5].name },
+			text = plugin.t("settings.coat"),
+			items = {
+				plugin.t("coat.ginger"),
+				plugin.t("coat.grey"),
+				plugin.t("coat.black"),
+				plugin.t("coat.white"),
+				plugin.t("coat.siamese"),
+			},
 			default = 1,
 			icon = "palette",
 		},
 		{
 			type = "slider",
 			key = "size",
-			text = "Размер",
+			text = plugin.t("settings.size"),
 			min = 2,
 			max = 5,
 			step = 1,
@@ -334,7 +341,7 @@ local function settings_page()
 		{
 			type = "slider",
 			key = "speed",
-			text = "Скорость",
+			text = plugin.t("settings.speed"),
 			min = 1,
 			max = 5,
 			step = 1,
@@ -360,12 +367,12 @@ local function settings_page()
 				end
 			end,
 		},
-		{ type = "header", text = "Характер" },
+		{ type = "header", text = plugin.t("settings.character") },
 		{
 			type = "switch",
 			key = "pettable",
-			text = "Можно гладить",
-			subtext = "Котик ловит клики. Выключите, если он мешает нажимать.",
+			text = plugin.t("settings.pettable"),
+			subtext = plugin.t("settings.pettable.about"),
 			icon = "like",
 			default = true,
 			on_change = close_overlay,
@@ -373,14 +380,14 @@ local function settings_page()
 		{
 			type = "switch",
 			key = "night",
-			text = "Спит по ночам",
-			subtext = "С 23:00 до 7:00 засыпает чаще.",
+			text = plugin.t("settings.night"),
+			subtext = plugin.t("settings.night.about"),
 			icon = "night",
 			default = true,
 		},
 		{
 			type = "text",
-			text = "Позвать котика",
+			text = plugin.t("call"),
 			icon = "add_user",
 			accent = true,
 			on_click = call_cat,
@@ -392,7 +399,7 @@ plugin.settings.page(settings_page)
 
 plugin.menu{
 	place = "main",
-	text = "Позвать котика",
+	text = plugin.t("call"),
 	icon = "fave",
 	on_click = call_cat,
 }

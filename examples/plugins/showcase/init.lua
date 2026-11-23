@@ -5,9 +5,23 @@
 -- • пункты в главном меню, в меню чата (⋮), у кнопки отправки и в
 --   разделах настроек;
 -- • плашка поверх окна с названием открытого чата;
--- • окно с кнопками и отправка с разметкой.
+-- • окно с кнопками и отправка с разметкой;
+-- • тексты на двух языках: locales/en.json и locales/ru.json, plugin.t().
 
-local GREETINGS = { "Привет", "Здравствуйте", "Йо" }
+-- Варианты приветствия на языке интерфейса. Страницы строятся при каждом
+-- открытии, поэтому список собирается заново, а не один раз при запуске.
+local function greetings()
+	return {
+		plugin.t("greeting.hi"),
+		plugin.t("greeting.hello"),
+		plugin.t("greeting.yo"),
+	}
+end
+
+local function greeting()
+	local list = greetings()
+	return list[plugin.settings.get("greeting", 1)] or list[1]
+end
 
 local function escape_html(text)
 	return (text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
@@ -17,7 +31,7 @@ local overlay
 
 local function current_title()
 	local now = tg.ui.current()
-	return now.title or "Список чатов"
+	return now.title or plugin.t("overlay.chat_list")
 end
 
 local function show_overlay()
@@ -34,7 +48,12 @@ local function show_overlay()
 			local w, h = c:size()
 			c:rect(0, 0, w, h, "windowBgOver", 12)
 			c:stroke(0, 0, w, h, "windowActiveTextFg", 1, 12)
-			c:text(12, 6, "Сейчас открыто", { size = 11, color = "windowSubTextFg" })
+			c:text(12, 6, plugin.t("overlay.label"), {
+				size = 11,
+				color = "windowSubTextFg",
+				width = w - 24,
+				height = 14,
+			})
 			c:text(12, 22, current_title(), {
 				size = 13,
 				bold = true,
@@ -43,7 +62,7 @@ local function show_overlay()
 			})
 		end,
 		on_click = function()
-			tg.toast{ title = "Витрина API", text = "Это плашка плагина, она рисуется на Lua." }
+			tg.toast{ title = plugin.t("title"), text = plugin.t("overlay.toast") }
 		end,
 	}
 end
@@ -64,17 +83,23 @@ end)
 
 local function about_page()
 	return {
-		title = "О витрине",
-		{ type = "header", text = "Что здесь" },
+		title = plugin.t("about.title"),
+		{ type = "header", text = plugin.t("about.header") },
 		{
 			type = "text",
-			text = "Вложенная страница",
-			subtext = "Строка с page = function() ... end открывает такую страницу.",
+			text = plugin.t("about.nested"),
+			subtext = plugin.t("about.nested.about"),
 			icon = "info",
 		},
 		{
 			type = "text",
-			text = "Канал с плагинами",
+			text = plugin.t("about.language"),
+			subtext = plugin.t("about.language.about", tg.lang()),
+			icon = "translate",
+		},
+		{
+			type = "text",
+			text = plugin.t("about.channel"),
 			subtext = "@fuckgramplugins",
 			icon = "channel",
 			accent = true,
@@ -86,16 +111,16 @@ local function about_page()
 end
 
 local function settings_page()
-	local greeting = GREETINGS[plugin.settings.get("greeting", 1)] or GREETINGS[1]
+	local hello = greeting()
 	local signature = plugin.settings.get("signature", "")
 	local size = plugin.settings.get("size", 14)
 	return {
-		{ type = "header", text = "Отображение" },
+		{ type = "header", text = plugin.t("settings.display") },
 		{
 			type = "switch",
 			key = "overlay",
-			text = "Плашка с открытым чатом",
-			subtext = "Справа сверху, поверх окна. Нажмите на неё.",
+			text = plugin.t("settings.overlay"),
+			subtext = plugin.t("settings.overlay.about"),
 			icon = "eye",
 			default = false,
 			on_change = function(on)
@@ -109,8 +134,8 @@ local function settings_page()
 		{
 			type = "selector",
 			key = "greeting",
-			text = "Приветствие",
-			items = GREETINGS,
+			text = plugin.t("settings.greeting"),
+			items = greetings(),
 			default = 1,
 			icon = "chat",
 			on_change = function()
@@ -120,8 +145,8 @@ local function settings_page()
 		{
 			type = "input",
 			key = "signature",
-			text = "Подпись",
-			placeholder = "Например: отправлено из fuckgram",
+			text = plugin.t("settings.signature"),
+			placeholder = plugin.t("settings.signature.placeholder"),
 			icon = "edit",
 			on_change = function()
 				plugin.settings.refresh()
@@ -130,7 +155,7 @@ local function settings_page()
 		{
 			type = "slider",
 			key = "size",
-			text = "Размер текста в превью",
+			text = plugin.t("settings.size"),
 			min = 10,
 			max = 24,
 			step = 1,
@@ -145,12 +170,14 @@ local function settings_page()
 			paint = function(c)
 				local w, h = c:size()
 				c:rect(22, 8, w - 44, h - 16, "windowBgOver", 10)
-				c:text(36, 14, greeting .. "!", {
+				c:text(36, 14, plugin.t("preview.greeting", hello), {
 					size = size,
 					bold = true,
 					color = "windowActiveTextFg",
+					width = w - 72,
+					height = size + 6,
 				})
-				c:text(36, 18 + size, signature ~= "" and signature or "без подписи", {
+				c:text(36, 18 + size, signature ~= "" and signature or plugin.t("preview.no_signature"), {
 					size = 12,
 					color = "windowSubTextFg",
 					width = w - 72,
@@ -158,29 +185,29 @@ local function settings_page()
 				})
 			end,
 			on_click = function()
-				tg.toast("Эта строка нарисована плагином")
+				tg.toast(plugin.t("preview.toast"))
 			end,
 		},
-		{ type = "divider", text = "Превью выше нарисовано на холсте и меняется вместе с настройками." },
-		{ type = "header", text = "О плагине" },
+		{ type = "divider", text = plugin.t("settings.preview.about") },
+		{ type = "header", text = plugin.t("settings.about") },
 		{
 			type = "text",
-			text = "Подробнее",
-			subtext = "Вложенная страница",
+			text = plugin.t("settings.more"),
+			subtext = plugin.t("settings.more.about"),
 			icon = "info",
 			page = about_page,
 		},
 		{
 			type = "text",
-			text = "Сбросить настройки",
+			text = plugin.t("settings.reset"),
 			icon = "delete",
 			red = true,
 			on_click = function()
 				tg.async(function()
 					local answer = tg.ui.dialog{
-						title = "Сбросить настройки?",
-						text = "Все значения вернутся к исходным.",
-						buttons = { "Сбросить", "Отмена" },
+						title = plugin.t("reset.title"),
+						text = plugin.t("reset.text"),
+						buttons = { plugin.t("reset.ok"), plugin.t("cancel") },
 						danger = 1,
 					}
 					if answer == 1 then
@@ -195,33 +222,33 @@ end
 
 plugin.settings.page(settings_page)
 
--- Пункты в разных местах клиента.
+-- Пункты в разных местах клиента. Их текст берётся при запуске плагина.
 plugin.menu{
 	place = "main",
-	text = "Витрина API",
+	text = plugin.t("title"),
 	icon = "plugins",
 	page = settings_page,
 }
 plugin.menu{
 	place = "settings.fuckgram",
-	text = "Витрина API",
+	text = plugin.t("title"),
 	icon = "plugins",
 	page = settings_page,
 }
 plugin.menu{
 	place = "chat",
-	text = "Витрина: поздороваться",
+	text = plugin.t("menu.greet"),
 	icon = "chat",
 	on_click = function(ctx)
 		tg.async(function()
-			local greeting = GREETINGS[plugin.settings.get("greeting", 1)] or GREETINGS[1]
+			local hello = greeting()
 			local answer = tg.ui.dialog{
-				title = "Поздороваться",
-				text = "Отправить «" .. greeting .. "» в этот чат?",
-				buttons = { "Отправить", "Отмена" },
+				title = plugin.t("greet.title"),
+				text = plugin.t("greet.text", hello),
+				buttons = { plugin.t("greet.send"), plugin.t("cancel") },
 			}
 			if answer == 1 and ctx.peer then
-				tg.messages.send(ctx.peer, "**" .. greeting .. "**", {
+				tg.messages.send(ctx.peer, "**" .. hello .. "**", {
 					parse_mode = "markdown",
 				})
 			end
@@ -230,12 +257,12 @@ plugin.menu{
 }
 plugin.menu{
 	place = "send",
-	text = "Отправить с подписью",
+	text = plugin.t("menu.signature"),
 	icon = "send",
 	on_click = function(ctx)
 		local signature = plugin.settings.get("signature", "")
 		if signature == "" then
-			tg.toast("Сначала задайте подпись в настройках витрины")
+			tg.toast(plugin.t("signature.empty"))
 		elseif ctx.peer then
 			tg.messages.send(ctx.peer, "<i>" .. escape_html(signature) .. "</i>", {
 				parse_mode = "html",

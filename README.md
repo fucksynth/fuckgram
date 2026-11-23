@@ -84,11 +84,16 @@ channel. The API, permissions and the catalog are described in
 
 ## Downloads
 
-Builds are in [GitHub Actions](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
-(sign in to GitHub to download): the latest successful run of `release` has
-the Release `fuckgram.exe`, runs of `dev` have Debug builds. Artifacts are
-kept for 2 days. Put the exe in a folder of its own: it keeps its data next
-to itself.
+The newest build is in [Releases](https://github.com/fucksynth/fuckgram/releases/latest):
+`fuckgram-win-x64.zip` with `fuckgram.exe`. Put the exe in a folder of its
+own: it keeps its data next to itself. After that fuckgram updates itself:
+it checks the releases once a day, downloads the new build in the
+background, checks its SHA-256 and offers "Update fuckgram" under the chat
+list (fuckgram Preferences → Updates).
+
+Debug builds of `dev` are in [GitHub Actions](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
+(sign in to GitHub to download, kept for 2 days); they do not update
+themselves.
 
 ## Building
 

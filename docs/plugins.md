@@ -90,9 +90,17 @@ package (manifest and the code check), so a broken file never installs.
 When the same `id` is posted again, the newest post wins; a newer `version`
 than the installed one shows the plugin under "Updates".
 
-- **Verified channels** are built into the client (now
-  [@fuckgramplugins](https://t.me/fuckgramplugins)): their plugins install
-  with "Unknown sources" off and the install box says "verified source".
+- **Verified sources** are built into the client: the channel
+  [@fuckgramplugins](https://t.me/fuckgramplugins) and the repository
+  [fucksynth/fuckgram-plugins](https://github.com/fucksynth/fuckgram-plugins).
+  Their plugins install with "Unknown sources" off and the install box
+  says "verified source".
+- **The repository** is read from its `main` branch: `index.json` lists
+  the packages, newest first, as
+  `{ "plugins": [ { "file": "dist/x.flua", "size": 123, "sha256": "...", "date": 1700000000 } ] }`.
+  A file whose size or SHA-256 does not match is not shown; downloaded
+  files are kept by their hash, so an unchanged plugin is not downloaded
+  again.
 - **Your channels** are added by username or `t.me` link and kept in
   `plugins_data/catalog.json`. Their plugins install only with "Unknown
   sources" on, like `.flua` files from chats.
@@ -318,6 +326,58 @@ needs `messages.send`.
 `qr`, `location`, `ip`, `username`, `topics`, `poll`, `article`, `spoiler`,
 `tag`, `payment`, `code`.
 
+### Translations
+
+A plugin speaks the interface language of the client. `name` and
+`description` in `manifest.json` are the default (English) texts; others
+go to `localized`:
+
+```json
+{
+    "name": "Pixel cat",
+    "description": "A pixel cat walks around the window.",
+    "localized": {
+        "ru": { "name": "Пиксельный котик", "description": "По окну гуляет пиксельный котик." }
+    }
+}
+```
+
+The plugin manager, the catalog and the install box show the texts of the
+interface language, and `plugin.name` is the translated name.
+
+Texts of the code live in `locales/<language>.json` of the package, one
+flat object per language:
+
+```json
+{
+    "menu.call": "Call the cat",
+    "toast.hello": "Hello, {1}!",
+    "toast.named": "{name} is here",
+    "messages": { "one": "{1} message", "other": "{1} messages" }
+}
+```
+
+```lua
+plugin.t("menu.call")                  -- "Позвать котика"
+plugin.t("toast.hello", "Ann")         -- {1}, {2}... are the arguments
+plugin.t("toast.named", { name = "Tom" })
+plugin.t("messages", 5)                -- "5 сообщений"
+tg.lang()                              -- "ru", "en", "pt-br"
+```
+
+- A text is looked up in the interface language (`pt-br`), then its base
+  (`pt`), then `en`; a missing key returns the key itself.
+- A plural value is an object of `one`, `few`, `many`, `other`. The count
+  is the first argument when it is a number, or the `count` field of a
+  table; the form follows the rules of the file's language (Russian,
+  Ukrainian, Belarusian, Polish, Czech, Slovak, and "one"/"other" for the
+  rest). A missing form falls back to `other`, then `many`.
+- The language can change while the plugin runs: settings pages are built
+  every time they open, so take texts in the page function; menu texts
+  are taken once.
+- `tools/flua_pack.py` checks the locale files and warns when languages
+  have different keys.
+
 ### exteraGram SDK and fuckgram
 
 What a plugin for exteraGram (Android) uses and where it is here:
@@ -432,6 +492,7 @@ cool_plugin.flua
 ├── init.lua        entry point: on_load / on_enable / on_disable / on_update
 ├── source/         plugin code
 ├── lib/            Lua libraries (no native code)
+├── locales/        texts: en.json, ru.json... (see "Translations")
 └── resources/      icons, texts, initial database (read-only)
 ```
 

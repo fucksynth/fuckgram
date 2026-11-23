@@ -97,9 +97,19 @@
 
 ---@class plugin
 ---@field id string
----@field name string
+---@field name string translated to the interface language
 ---@field version string
 plugin = {}
+
+---The text of `key` from locales/<language>.json in the interface
+---language (then its base language, then English; the key itself if
+---none has it). {1}, {2}... are replaced by the arguments, or {name} by
+---the fields of a table. A plural value { one, few, many, other } takes
+---the form for the first argument (a number) or the `count` field.
+---@param key string
+---@param ... any
+---@return string
+function plugin.t(key, ...) end
 
 ---@overload fun(event: "message.new", handler: fun(message: Message))
 ---@overload fun(event: "message.send", handler: fun(draft: Draft): (false|string|nil))
@@ -435,6 +445,10 @@ function tg.ui.window_size() end
 ---Milliseconds of a steady clock.
 ---@return integer
 function tg.now() end
+
+---The interface language, lowercase: "ru", "en", "pt-br".
+---@return string
+function tg.lang() end
 
 ---@class PlayerState
 ---@field title string

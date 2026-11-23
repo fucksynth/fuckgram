@@ -1,5 +1,6 @@
 -- Раскладка: «ghbdtn» -> «привет», «руддщ» -> «hello». Направление плагин
--- выбирает сам: каких букв в тексте больше, те и неправильные.
+-- выбирает сам: каких букв в тексте больше, те и неправильные. Команду
+-- /fix, ссылки и окно с результатом можно настроить на странице настроек.
 
 local EN = "`qwertyuiop[]asdfghjkl;'zxcvbnm,./~QWERTYUIOP{}ASDFGHJKL:\"ZXCVBNM<>?@#$^&"
 local RU = "ёйцукенгшщзхъфывапролджэячсмитьбю.ЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,\"№;:?"
@@ -49,7 +50,11 @@ local function convert(text)
 end
 
 -- Ссылки и @имена не трогаем: их обычно вставляют, а не набирают.
+-- Без этой настройки переводится весь текст.
 local function convertKeepingLinks(text)
+	if not plugin.settings.get("keep_links", true) then
+		return convert(text) or text
+	end
 	local pieces, last = {}, 1
 	for start, word, finish in text:gmatch("()(%S+)()") do
 		if word:match("^https?://") or word:match("^@[%w_]+$") then
@@ -62,31 +67,83 @@ local function convertKeepingLinks(text)
 	return table.concat(pieces)
 end
 
-plugin.menu("chat", "Исправить раскладку в поле ввода", function()
-	local text = tg.compose.get()
-	if not text or text == "" then
-		tg.toast("Раскладка: поле ввода пустое")
-		return
-	end
-	tg.compose.set(convertKeepingLinks(text))
-end)
+local function notify(text)
+	tg.toast{ title = plugin.t("title"), text = text }
+end
 
-plugin.menu("message", "Перевести раскладку", function(ctx)
-	local text = ctx.message and ctx.message.text
-	if not text or text == "" then
-		tg.toast("Раскладка: в сообщении нет текста")
-		return
-	end
-	local fixed = convertKeepingLinks(text)
-	tg.ui.copy(fixed)
-	tg.ui.alert(fixed, "В другой раскладке (скопировано)")
-end)
+plugin.menu{
+	place = "chat",
+	text = plugin.t("menu.field"),
+	icon = "edit",
+	on_click = function()
+		local text = tg.compose.get()
+		if not text or text == "" then
+			notify(plugin.t("toast.empty_field"))
+			return
+		end
+		tg.compose.set(convertKeepingLinks(text))
+	end,
+}
+
+plugin.menu{
+	place = "message",
+	text = plugin.t("menu.message"),
+	icon = "translate",
+	on_click = function(ctx)
+		local text = ctx.message and ctx.message.text
+		if not text or text == "" then
+			notify(plugin.t("toast.no_text"))
+			return
+		end
+		local fixed = convertKeepingLinks(text)
+		tg.ui.copy(fixed)
+		if plugin.settings.get("show_result", true) then
+			tg.ui.alert(fixed, plugin.t("dialog.copied"))
+		else
+			notify(plugin.t("toast.copied"))
+		end
+	end,
+}
 
 -- «/fix ghbdtn» уходит как «привет».
 plugin.on("message.send", function(draft)
+	if not plugin.settings.get("fix_command", true) then
+		return nil
+	end
 	local text = draft.text:match("^/fix%s+(.+)$")
 	if not text then
 		return nil
 	end
 	return convertKeepingLinks(text)
+end)
+
+plugin.settings.page(function()
+	return {
+		{ type = "header", text = plugin.t("settings.header") },
+		{
+			type = "switch",
+			key = "keep_links",
+			text = plugin.t("settings.keep_links"),
+			subtext = plugin.t("settings.keep_links.about"),
+			icon = "link",
+			default = true,
+		},
+		{
+			type = "switch",
+			key = "fix_command",
+			text = plugin.t("settings.fix_command"),
+			subtext = plugin.t("settings.fix_command.about"),
+			icon = "send",
+			default = true,
+		},
+		{
+			type = "switch",
+			key = "show_result",
+			text = plugin.t("settings.show_result"),
+			subtext = plugin.t("settings.show_result.about"),
+			icon = "eye",
+			default = true,
+		},
+		{ type = "divider", text = plugin.t("settings.where") },
+	}
 end)

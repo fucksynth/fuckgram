@@ -1,0 +1,12 @@
+{
+    "settings.privacy": "Privacy",
+    "settings.hide_typing": "Hide “typing…”",
+    "settings.hide_typing.about": "Others do not see that you are typing, recording a voice message or sending a file.",
+    "settings.data_center": "Data center",
+    "settings.dc_command": "/dc command",
+    "settings.dc_command.about": "Instead of /dc the chat gets your country and data center.",
+    "settings.check": "Check my data center",
+    "settings.check.about": "Asks Telegram with help.getNearestDc.",
+    "dc.reply": "Country: {country}, my data center: {this_dc}, nearest: {nearest}",
+    "error.dc": "Telegram did not answer: {1}"
+}
