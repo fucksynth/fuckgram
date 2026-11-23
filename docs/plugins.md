@@ -10,8 +10,11 @@ catalog is not done yet.
 
 A plugin is a folder or a `.flua` archive (zip) with `manifest.json` at its
 root. Put it into `plugins/` next to `tdata` (portable) or in the fuckgram data
-folder, then restart. Settings → Plugins lists what is loaded and the last
-error of each plugin. Examples: [`examples/plugins/hello`](../examples/plugins/hello) (send filter,
+folder, then restart. Settings → Plugins shows a card for each plugin: its
+icon, version, author, description, permissions and last error, a switch,
+and buttons to send the `.flua` to a chat, read its journal (`tg.log`,
+`print`, errors), open a development folder or delete an installed plugin.
+Examples: [`examples/plugins/hello`](../examples/plugins/hello) (send filter,
 menus, settings), [`examples/plugins/weather`](../examples/plugins/weather)
 (`tg.async` + HTTP), [`examples/plugins/raw`](../examples/plugins/raw)
 (`tg.invoke`, MTProto filters) and
@@ -20,9 +23,10 @@ the whole API: type `/t` in any chat).
 
 Pack a folder with `python tools/flua_pack.py <folder>`: it checks the
 manifest and writes `<id>.flua`. The code check below runs in the client.
-An unpacked plugin folder in `plugins/` is a development folder: when a file
-in it is saved, added or removed the client reloads the plugin within a second
-and shows a toast with the result or the error, no restart needed.
+An unpacked plugin folder in `plugins/` is a development folder: with the
+developer mode on (Settings → Plugins → Plugin engine, on by default), when a
+file in it is saved, added or removed the client reloads the plugin within a
+second and shows a toast with the result or the error, no restart needed.
 Types for the editor (lua-language-server) are in
 [`docs/sdk/fuckgram.lua`](sdk/fuckgram.lua): add `docs/sdk` to
 `workspace.library` for completion and checks of the whole API.
@@ -50,19 +54,42 @@ passed around, for example `pcall(tg.toast, text)`, except `plugin.on`,
 
 To install a packed plugin, send the `.flua` file to any chat (Saved
 Messages works) and open it: the client shows what the plugin will be able to
-do and installs it on confirmation. Settings → Plugins turns plugins on and
-off and opens the plugins folder.
+do and installs it on confirmation, turned on or off. Settings → Plugins
+turns plugins on and off and opens the plugins folder.
 
 ```json
 {
     "id": "example.hello",
     "name": "Hello",
     "version": "1.0",
+    "author": "you",
+    "description": "What it does, in a sentence or two.",
+    "icon": "resources/icon.png",
     "api": { "min": 1, "max": 1 },
     "entry": "init.lua",
     "permissions": ["messages.send", "ui", "storage"]
 }
 ```
+
+`icon` is optional: a square PNG or JPEG in the package, up to 1024×1024
+(without it the card shows the first letter of the name).
+
+### Plugin engine
+
+Settings → Plugins → Plugin engine:
+
+- **Developer mode** — development folders reload on save.
+- **Compact view** — cards without descriptions and buttons.
+- **Unknown sources** — off: `.flua` files from chats are not installed.
+- **Code check** — always on.
+- **Confirm sensitive actions** (on by default) — `tg.invoke` of payments,
+  Stars, gifts (`payments.*` except reading), paid reactions, `auth.*`,
+  sessions, the password, the phone, Telegram Passport, account deletion and
+  ownership transfer waits for the user's "Allow"; refused calls end with
+  `CLIENT_PLUGIN_DENIED`. `mtproto.request` filters may cancel such
+  requests but not change them.
+- **Safe mode** — plugins do not run. It turns on by itself when the client
+  closes while plugins start (the first 10 seconds).
 
 | Lua | Permission | What it does |
 |---|---|---|
