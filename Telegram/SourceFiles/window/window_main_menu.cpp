@@ -850,7 +850,7 @@ void MainMenu::setupMenu() {
 	for (auto &item : Plugins::MainMenuItems()) {
 		addAction(
 			rpl::single(std::move(item.text)),
-			{ &st::menuIconBotCommands }
+			{ item.icon ? item.icon : &st::menuIconBotCommands }
 		)->setClickedCallback(std::move(item.handler));
 	}
 

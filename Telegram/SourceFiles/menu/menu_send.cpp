@@ -8,6 +8,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "menu/menu_send.h"
 
 #include "menu/menu_checked_action.h"
+#include "plugins/plugins_hooks.h"
 
 #include "api/api_common.h"
 #include "base/event_filter.h"
@@ -838,6 +839,11 @@ FillMenuResult FillSendMenu(
 				: tr::lng_context_make_paid(tr::now)),
 			[=] { action({ .type = ActionType::ChangePrice }, details); },
 			&icons.menuPrice);
+	}
+
+	// PLUGIN-HOOK: send_menu
+	if (sending) {
+		Plugins::FillSendMenu(menu, nullptr);
 	}
 
 	if (maybeShow) {

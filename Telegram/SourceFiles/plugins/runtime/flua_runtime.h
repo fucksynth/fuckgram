@@ -58,6 +58,7 @@ struct PluginView {
 	bool dev = false; // an unpacked development folder
 	bool enabled = false;
 	bool running = false;
+	bool settings = false; // has a settings page (plugin.settings.page)
 };
 
 struct InvalidView {
@@ -82,6 +83,8 @@ public:
 
 	// For the manager: what is loaded and when that changes.
 	[[nodiscard]] std::vector<PluginView> pluginViews() const;
+	// The loaded plugin of the id, nullptr if there is none.
+	[[nodiscard]] Plugin *plugin(const QString &id) const;
 	[[nodiscard]] std::vector<InvalidView> invalidViews() const;
 	[[nodiscard]] std::deque<QString> journal(const QString &id) const;
 	[[nodiscard]] rpl::producer<> changes() const;
@@ -133,6 +136,11 @@ public:
 		HistoryItem *item,
 		const QString &text) override;
 	void mainMenu(std::vector<MenuItem> &items) override;
+	void sendMenu(PeerData *peer, std::vector<MenuItem> &items) override;
+	void settingsSection(
+		const QString &section,
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Window::SessionController*> controller) override;
 	void profileRows(
 		not_null<PeerData*> peer,
 		std::vector<ProfileRow> &rows) override;

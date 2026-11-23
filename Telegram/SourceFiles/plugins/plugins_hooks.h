@@ -8,6 +8,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 
 #include "base/basic_types.h"
 #include "data/data_msg_id.h"
+#include "settings/settings_type.h"
 #include "ui/text/text_entity.h"
 
 #include <optional>
@@ -31,6 +32,7 @@ class Instance;
 
 namespace Ui {
 class PopupMenu;
+class VerticalLayout;
 } // namespace Ui
 
 namespace Ui::Menu {
@@ -64,6 +66,8 @@ enum class Hook : uint32 {
 	Request,      // filter: cancel / replace an outgoing MTProto request
 	Response,     // filter: replace a response to a request
 	Updates,      // filter: drop / replace a raw incoming updates container
+	SendMenu,     // ui: items in the menu of the send button
+	SettingsSection, // ui: rows at the end of a settings section
 
 	Count,
 };
@@ -112,6 +116,7 @@ enum class PeerMenuPlace {
 struct MenuItem {
 	QString text;
 	Fn<void()> handler;
+	const style::icon *icon = nullptr; // the plugins icon if not set
 };
 
 enum class ClientEvent {
@@ -215,6 +220,16 @@ public:
 		return std::nullopt;
 	}
 	virtual void mainMenu(std::vector<MenuItem> &) {
+	}
+	// `peer`: the chat of the send button, nullptr if not known.
+	virtual void sendMenu(PeerData*, std::vector<MenuItem> &) {
+	}
+	// Rows of plugins at the end of a settings section; `section` is a
+	// name from SettingsSectionName() or "plugins".
+	virtual void settingsSection(
+			const QString &,
+			not_null<Ui::VerticalLayout*>,
+			not_null<Window::SessionController*>) {
 	}
 	// true drops the update: it is not applied by the client. Its pts
 	// is already counted, so the update state stays consistent.
@@ -320,6 +335,23 @@ void RefreshDisplayText();
 
 // Items for the main (drawer) menu.
 [[nodiscard]] std::vector<MenuItem> MainMenuItems();
+
+// Adds the plugin items to the menu of the send button.
+void FillSendMenu(not_null<Ui::PopupMenu*> menu, PeerData *peer);
+
+// "main", "chats", "privacy", "fuckgram"...: how plugins name a settings
+// section, empty for sections they can't add rows to.
+[[nodiscard]] QString SettingsSectionName(const Settings::Type &type);
+
+// Adds rows of plugins at the end of a settings section.
+void FillSettingsSection(
+	const Settings::Type &type,
+	not_null<Ui::VerticalLayout*> container,
+	not_null<Window::SessionController*> controller);
+void FillSettingsSection(
+	const QString &section,
+	not_null<Ui::VerticalLayout*> container,
+	not_null<Window::SessionController*> controller);
 
 // Message input fields register themselves; the runtime reads and
 // replaces the text of the current one (focused, else visible).

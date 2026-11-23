@@ -117,6 +117,31 @@ const ApiEntry kApi[] = {
 	{ "plugin.name", ApiType::Field, nullptr },
 	{ "plugin.version", ApiType::Field, nullptr },
 	{ "require", ApiType::Function, nullptr },
+	{ "plugin.menu_remove", ApiType::Function, kPermUi },
+	{ "plugin.settings.all", ApiType::Function, kPermStorage },
+	{ "plugin.settings.reset", ApiType::Function, kPermStorage },
+	{ "plugin.settings.page", ApiType::Function, kPermUi },
+	{ "plugin.settings.refresh", ApiType::Function, kPermUi },
+	{ "tg.dump", ApiType::Function, nullptr },
+	{ "tg.now", ApiType::Function, nullptr },
+	{ "tg.messages.send_file", ApiType::Function, kPermMessagesSend },
+	{ "tg.ui.dialog", ApiType::Function, kPermUi },
+	{ "tg.ui.current", ApiType::Function, kPermChatsRead },
+	{ "tg.ui.open", ApiType::Function, kPermUi },
+	{ "tg.ui.color", ApiType::Function, nullptr },
+	{ "tg.ui.image", ApiType::Function, kPermUi },
+	{ "tg.ui.image_free", ApiType::Function, kPermUi },
+	{ "tg.ui.overlay", ApiType::Function, kPermUi },
+	{ "tg.ui.window_size", ApiType::Function, kPermUi },
+	{ "tg.player", ApiType::Table, nullptr },
+	{ "tg.player.state", ApiType::Function, kPermPlayer },
+	{ "tg.player.toggle", ApiType::Function, kPermPlayer },
+	{ "tg.player.play", ApiType::Function, kPermPlayer },
+	{ "tg.player.pause", ApiType::Function, kPermPlayer },
+	{ "tg.player.next", ApiType::Function, kPermPlayer },
+	{ "tg.player.previous", ApiType::Function, kPermPlayer },
+	{ "tg.player.stop", ApiType::Function, kPermPlayer },
+	{ "tg.player.seek", ApiType::Function, kPermPlayer },
 };
 
 struct EventEntry {
@@ -138,7 +163,7 @@ const EventEntry kEvents[] = {
 	{ "mtproto.updates", kPermMtproto },
 };
 
-const char *kMenuPlaces[] = { "message", "main", "chat", "profile" };
+const char *kMenuPlaces[] = { "message", "main", "chat", "profile", "send" };
 
 // Not available in the sandbox, so using them only hides intent.
 const char *kForbidden[] = {
@@ -379,14 +404,21 @@ void Analyzer::call(
 		}
 		first = 2;
 	} else if (callee.kind == Kind::Api && callee.text == "plugin.menu") {
+		// plugin.menu(place, text, fn): a known constant place;
+		// plugin.menu{ place = ..., ... }: checked when it runs.
 		const auto place = arg(1);
-		auto known = false;
-		for (const auto name : kMenuPlaces) {
-			known |= (place.kind == Kind::String && place.text == name);
-		}
-		if (!known) {
-			fail(p, pc, u"plugin.menu needs a constant place: "
-				"message, main, chat or profile"_q);
+		if (place.kind == Kind::String) {
+			auto known = false;
+			for (const auto name : kMenuPlaces) {
+				known |= (place.text == name);
+			}
+			if (!known) {
+				fail(p, pc, u"plugin.menu needs a constant place: "
+					"message, main, chat, profile or send"_q);
+				return;
+			}
+		} else if (place.kind != Kind::Unknown) {
+			fail(p, pc, u"plugin.menu needs a constant place or a table"_q);
 			return;
 		}
 		first = 2;

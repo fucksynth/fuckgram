@@ -157,3 +157,20 @@ pluginsActionUpdate: icon {{ "menu/restore", windowActiveTextFg }};
 pluginsActionUpdateOver: icon {{ "menu/restore", windowActiveTextFg }};
 pluginsActionRemoveSource: icon {{ "menu/delete", windowSubTextFg }};
 pluginsActionRemoveSourceOver: icon {{ "menu/delete", attentionButtonFg }};
+
+pluginsActionSettings: icon {{ "menu/settings", windowSubTextFg }};
+pluginsActionSettingsOver: icon {{ "menu/settings", windowBoldFg }};
+
+// Pages of plugins.
+pluginsPageRowPadding: margins(22px, 9px, 22px, 9px);
+pluginsPageRowMinHeight: 48px;
+pluginsPageIconSkip: 42px;
+pluginsPageLineSkip: 2px;
+pluginsPageTitleStyle: TextStyle(defaultTextStyle) {
+	font: font(14px);
+}
+pluginsPageSubtitleStyle: TextStyle(defaultTextStyle) {
+	font: font(13px);
+}
+pluginsPageValueFont: font(14px);
+pluginsPageSliderPadding: margins(22px, 0px, 22px, 10px);

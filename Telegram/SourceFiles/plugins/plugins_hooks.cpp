@@ -17,6 +17,24 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
+#include "ayu/ui/settings/settings_appearance.h"
+#include "ayu/ui/settings/settings_ayu.h"
+#include "ayu/ui/settings/settings_chats.h"
+#include "ayu/ui/settings/settings_filters.h"
+#include "ayu/ui/settings/settings_general.h"
+#include "ayu/ui/settings/settings_main.h"
+#include "ayu/ui/settings/settings_other.h"
+#include "settings/sections/settings_active_sessions.h"
+#include "settings/sections/settings_advanced.h"
+#include "settings/sections/settings_blocked_peers.h"
+#include "settings/sections/settings_calls.h"
+#include "settings/sections/settings_chat.h"
+#include "settings/sections/settings_folders.h"
+#include "settings/sections/settings_information.h"
+#include "settings/sections/settings_main.h"
+#include "settings/sections/settings_notifications.h"
+#include "settings/sections/settings_privacy_security.h"
+#include "settings/sections/settings_shortcuts.h"
 #include "ui/widgets/menu/menu_add_action_callback.h"
 #include "ui/widgets/popup_menu.h"
 #include "styles/style_menu_icons.h"
@@ -99,6 +117,8 @@ struct ComposeEntry {
 	case Hook::Request: return "request";
 	case Hook::Response: return "response";
 	case Hook::Updates: return "updates";
+	case Hook::SendMenu: return "send_menu";
+	case Hook::SettingsSection: return "settings_section";
 	case Hook::Count: break;
 	}
 	return "unknown";
@@ -237,7 +257,7 @@ void FillPeerMenu(
 			addAction(
 				item.text,
 				std::move(item.handler),
-				&st::menuIconBotCommands);
+				item.icon ? item.icon : &st::menuIconBotCommands);
 		}
 		return;
 	}
@@ -251,7 +271,7 @@ void FillPeerMenu(
 				menu->addAction(
 					item.text,
 					std::move(item.handler),
-					&st::menuIconBotCommands);
+					item.icon ? item.icon : &st::menuIconBotCommands);
 			}
 		},
 	});
@@ -281,7 +301,7 @@ void FillMessageMenu(not_null<Ui::PopupMenu*> menu, HistoryItem *item) {
 		menu->addAction(
 			entry.text,
 			std::move(entry.handler),
-			&st::menuIconBotCommands);
+			entry.icon ? entry.icon : &st::menuIconBotCommands);
 	}
 }
 
@@ -332,6 +352,78 @@ void RefreshDisplayText() {
 			refresh(channel);
 		});
 	}
+}
+
+void FillSendMenu(not_null<Ui::PopupMenu*> menu, PeerData *peer) {
+	if (!Ready(Hook::SendMenu)) {
+		return;
+	}
+	auto items = std::vector<MenuItem>();
+	{
+		const auto guard = InFlight(Hook::SendMenu);
+		CurrentSink->sendMenu(peer, items);
+	}
+	for (auto &entry : items) {
+		if (entry.text.isEmpty() || !entry.handler) {
+			continue;
+		}
+		menu->addAction(
+			entry.text,
+			std::move(entry.handler),
+			entry.icon ? entry.icon : &st::menuIconBotCommands);
+	}
+}
+
+QString SettingsSectionName(const Settings::Type &type) {
+	const auto known = std::vector<std::pair<Settings::Type, const char*>>{
+		{ Settings::MainId(), "main" },
+		{ Settings::InformationId(), "account" },
+		{ Settings::NotificationsId(), "notifications" },
+		{ Settings::PrivacySecurityId(), "privacy" },
+		{ Settings::ChatId(), "chats" },
+		{ Settings::FoldersId(), "folders" },
+		{ Settings::AdvancedId(), "advanced" },
+		{ Settings::CallsId(), "calls" },
+		{ Settings::SessionsId(), "sessions" },
+		{ Settings::BlockedPeersId(), "blocked" },
+		{ Settings::ShortcutsId(), "shortcuts" },
+		{ Settings::AyuMainId(), "fuckgram" },
+		{ Settings::AyuGhostId(), "fuckgram.ghost" },
+		{ Settings::AyuFiltersId(), "fuckgram.filters" },
+		{ Settings::AyuGeneralId(), "fuckgram.general" },
+		{ Settings::AyuAppearanceId(), "fuckgram.appearance" },
+		{ Settings::AyuChatsId(), "fuckgram.chats" },
+		{ Settings::AyuOtherId(), "fuckgram.other" },
+	};
+	for (const auto &[id, name] : known) {
+		if (id == type) {
+			return QString::fromLatin1(name);
+		}
+	}
+	return QString();
+}
+
+void FillSettingsSection(
+		const Settings::Type &type,
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Window::SessionController*> controller) {
+	if (!Ready(Hook::SettingsSection)) {
+		return;
+	}
+	if (const auto name = SettingsSectionName(type); !name.isEmpty()) {
+		FillSettingsSection(name, container, controller);
+	}
+}
+
+void FillSettingsSection(
+		const QString &section,
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Window::SessionController*> controller) {
+	if (!Ready(Hook::SettingsSection)) {
+		return;
+	}
+	const auto guard = InFlight(Hook::SettingsSection);
+	CurrentSink->settingsSection(section, container, controller);
 }
 
 std::vector<MenuItem> MainMenuItems() {

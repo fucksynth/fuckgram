@@ -11,6 +11,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "apiwrap.h"
 #include "core/application.h"
 #include "base/unixtime.h"
+#include "data/data_document.h"
 #include "data/data_drafts.h"
 #include "data/data_histories.h"
 #include "data/data_peer.h"
@@ -24,18 +25,30 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "main/main_account.h"
 #include "main/main_domain.h"
 #include "main/main_session.h"
+#include "media/audio/media_audio.h"
+#include "media/player/media_player_instance.h"
 #include "mtproto/details/mtproto_serialized_request.h"
 #include "mtproto/mtp_instance.h"
 #include "mtproto/mtproto_response.h"
 #include "plugins/plugins_hooks.h"
 #include "plugins/runtime/flua_runtime.h"
 #include "plugins/runtime/flua_tl.h"
+#include "storage/localimageloader.h"
+#include "storage/storage_media_prepare.h"
+#include "ui/basic_click_handlers.h"
 #include "ui/boxes/confirm_box.h"
+#include "ui/chat/attach/attach_prepare.h"
 #include "ui/layers/generic_box.h"
+#include "ui/text/text_utilities.h"
+#include "ui/toast/toast.h"
+#include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
+#include "window/main_window.h"
 #include "window/window_controller.h"
 #include "window/window_session_controller.h"
+#include "window/window_session_controller_link_info.h"
+#include "styles/style_boxes.h"
 #include "styles/style_layers.h"
 #include "styles/style_widgets.h"
 
@@ -83,6 +96,15 @@ constexpr auto kMaxInput = 4096;
 constexpr auto kMaxDelete = 100;
 constexpr auto kMaxFile = qint64(16 * 1024 * 1024);
 constexpr auto kMaxFiles = qint64(64 * 1024 * 1024); // all files of a plugin
+constexpr auto kPaintBudget = crl::time(100);
+constexpr auto kMaxPageRows = 500;
+constexpr auto kMaxCustomHeight = 1000;
+constexpr auto kMaxImages = 64;
+constexpr auto kMaxImageSide = 2048;
+constexpr auto kMaxOverlays = 16;
+constexpr auto kMaxOverlaySide = 4096;
+constexpr auto kMaxDumpDepth = 8;
+constexpr auto kMaxDumpItems = 100;
 
 void PushString(lua_State *L, const QString &value) {
 	const auto utf8 = value.toUtf8();
@@ -214,6 +236,195 @@ void PushJson(lua_State *L, const QJsonValue &value, int depth) {
 		: QString();
 	lua_pop(L, 1);
 	return result;
+}
+
+[[nodiscard]] std::optional<MenuPlace> ParseMenuPlace(const QString &place) {
+	if (place == u"message"_q) {
+		return MenuPlace::Message;
+	} else if (place == u"main"_q) {
+		return MenuPlace::Main;
+	} else if (place == u"chat"_q) {
+		return MenuPlace::Chat;
+	} else if (place == u"profile"_q) {
+		return MenuPlace::Profile;
+	} else if (place == u"send"_q) {
+		return MenuPlace::Send;
+	}
+	return std::nullopt;
+}
+
+// <b>, <i>, <u>, <s>, <code>, <pre>, <a href>, <tg-spoiler>, <blockquote>
+// and &amp; &lt; &gt; &quot; &#NN; to text with entities. Unknown tags
+// are dropped, their text is kept.
+[[nodiscard]] TextWithEntities ParseHtml(const QString &html) {
+	struct Open {
+		QString tag;
+		EntityType type = EntityType::Invalid;
+		int offset = 0;
+		QString data;
+	};
+	static const auto href = QRegularExpression(
+		u"href\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')"_q,
+		QRegularExpression::CaseInsensitiveOption);
+	auto result = TextWithEntities();
+	auto stack = std::vector<Open>();
+	auto i = 0;
+	const auto size = int(html.size());
+	while (i < size) {
+		const auto ch = html[i];
+		if (ch == u'<') {
+			const auto close = html.indexOf(u'>', i);
+			if (close < 0) {
+				result.text += html.mid(i);
+				break;
+			}
+			auto inside = html.mid(i + 1, close - i - 1).trimmed();
+			i = close + 1;
+			const auto closing = inside.startsWith(u'/');
+			if (closing) {
+				inside = inside.mid(1).trimmed();
+			}
+			if (inside.endsWith(u'/')) {
+				inside.chop(1);
+			}
+			const auto space = inside.indexOf(u' ');
+			const auto name = ((space < 0) ? inside : inside.left(space))
+				.trimmed()
+				.toLower();
+			const auto attributes = (space < 0) ? QString() : inside.mid(space);
+			if (name == u"br"_q) {
+				result.text += u'\n';
+				continue;
+			}
+			auto type = EntityType::Invalid;
+			auto data = QString();
+			if (name == u"b"_q || name == u"strong"_q) {
+				type = EntityType::Bold;
+			} else if (name == u"i"_q || name == u"em"_q) {
+				type = EntityType::Italic;
+			} else if (name == u"u"_q || name == u"ins"_q) {
+				type = EntityType::Underline;
+			} else if (name == u"s"_q
+				|| name == u"strike"_q
+				|| name == u"del"_q) {
+				type = EntityType::StrikeOut;
+			} else if (name == u"code"_q) {
+				type = EntityType::Code;
+			} else if (name == u"pre"_q) {
+				type = EntityType::Pre;
+			} else if (name == u"blockquote"_q) {
+				type = EntityType::Blockquote;
+			} else if (name == u"tg-spoiler"_q
+				|| name == u"spoiler"_q
+				|| (name == u"span"_q
+					&& attributes.contains(u"tg-spoiler"_q))) {
+				type = EntityType::Spoiler;
+			} else if (name == u"a"_q) {
+				type = EntityType::CustomUrl;
+				const auto match = href.match(attributes);
+				if (match.hasMatch()) {
+					data = match.captured(1).isEmpty()
+						? match.captured(2)
+						: match.captured(1);
+				}
+			}
+			if (type == EntityType::Invalid) {
+				continue;
+			}
+			if (!closing) {
+				stack.push_back({
+					.tag = name,
+					.type = type,
+					.offset = int(result.text.size()),
+					.data = data,
+				});
+				continue;
+			}
+			for (auto j = int(stack.size()) - 1; j >= 0; --j) {
+				if (stack[j].tag != name) {
+					continue;
+				}
+				const auto open = stack[j];
+				stack.erase(begin(stack) + j);
+				const auto length = int(result.text.size()) - open.offset;
+				if (length > 0
+					&& (open.type != EntityType::CustomUrl
+						|| !open.data.isEmpty())) {
+					result.entities.push_back(EntityInText(
+						open.type,
+						open.offset,
+						length,
+						open.data));
+				}
+				break;
+			}
+		} else if (ch == u'&') {
+			const auto semicolon = html.indexOf(u';', i);
+			auto decoded = QString();
+			if (semicolon > i && semicolon - i <= 10) {
+				const auto entity = html.mid(i + 1, semicolon - i - 1);
+				if (entity == u"amp"_q) {
+					decoded = u"&"_q;
+				} else if (entity == u"lt"_q) {
+					decoded = u"<"_q;
+				} else if (entity == u"gt"_q) {
+					decoded = u">"_q;
+				} else if (entity == u"quot"_q) {
+					decoded = u"\""_q;
+				} else if (entity == u"apos"_q) {
+					decoded = u"'"_q;
+				} else if (entity == u"nbsp"_q) {
+					decoded = QString(QChar(0xA0));
+				} else if (entity.startsWith(u'#')) {
+					auto ok = false;
+					const auto hex = entity.startsWith(u"#x"_q, Qt::CaseInsensitive);
+					const auto code = hex
+						? entity.mid(2).toUInt(&ok, 16)
+						: entity.mid(1).toUInt(&ok, 10);
+					if (ok && code > 0 && code < 0x110000) {
+						decoded = QString::fromUcs4(&code, 1);
+					}
+				}
+			}
+			if (decoded.isEmpty()) {
+				result.text += ch;
+				++i;
+			} else {
+				result.text += decoded;
+				i = semicolon + 1;
+			}
+		} else {
+			result.text += ch;
+			++i;
+		}
+	}
+	ranges::sort(result.entities, [](
+			const EntityInText &a,
+			const EntityInText &b) {
+		return a.offset() < b.offset();
+	});
+	return result;
+}
+
+// parse_mode = "markdown" | "html" | nil (plain text).
+[[nodiscard]] TextWithEntities Formatted(
+		const QString &text,
+		const QString &mode) {
+	if (mode == u"markdown"_q) {
+		return TextUtilities::ParseEntities(
+			text,
+			TextParseLinks | TextParseMarkdown);
+	} else if (mode == u"html"_q) {
+		return ParseHtml(text);
+	}
+	return TextWithEntities{ text };
+}
+
+[[nodiscard]] TextWithTags ToTags(TextWithEntities &&text) {
+	return TextWithTags{
+		text.text,
+		TextUtilities::ConvertEntitiesToTextTags(text.entities),
+	};
 }
 
 [[nodiscard]] Window::SessionController *ActiveController() {
@@ -455,6 +666,10 @@ bool Plugin::start() {
 	}
 	*static_cast<Plugin**>(lua_getextraspace(_lua)) = this;
 	loadSettings();
+	_imageLookup = [=](int id) -> const QImage* {
+		const auto i = _images.find(id);
+		return (i != end(_images)) ? &i->second : nullptr;
+	};
 
 	lua_pushcfunction(_lua, &Plugin::Setup);
 	if (!call(0, 0, kStartBudget)) {
@@ -488,6 +703,16 @@ void Plugin::stop() {
 	_timers.clear();
 	_threads.clear();
 	_invokes = 0;
+	// Not right now: stop() may come from a click on an overlay.
+	for (auto &[id, overlay] : base::take(_overlays)) {
+		if (const auto widget = overlay.widget.release()) {
+			widget->hide();
+			widget->deleteLater();
+		}
+	}
+	_images.clear();
+	_settingsPage = kNoRef;
+	_pageBuilders.clear();
 	lua_close(_lua);
 	_lua = nullptr;
 	for (auto &list : _handlers) {
@@ -581,9 +806,14 @@ void Plugin::registerApi() {
 	lua_setfield(_lua, -2, "version");
 	set("on", &Plugin::ApiOn);
 	set("menu", &Plugin::ApiMenu);
+	set("menu_remove", &Plugin::ApiMenuRemove);
 	lua_newtable(_lua);
 	set("get", &Plugin::ApiSettingsGet);
 	set("set", &Plugin::ApiSettingsSet);
+	set("all", &Plugin::ApiSettingsAll);
+	set("reset", &Plugin::ApiSettingsReset);
+	set("page", &Plugin::ApiSettingsPage);
+	set("refresh", &Plugin::ApiSettingsRefresh);
 	lua_setfield(_lua, -2, "settings");
 	set("resource", &Plugin::ApiResource);
 	lua_newtable(_lua);
@@ -598,9 +828,12 @@ void Plugin::registerApi() {
 	//       ui = { refresh } }
 	lua_newtable(_lua);
 	set("log", &Plugin::ApiPrint);
+	set("dump", &Plugin::ApiDump);
+	set("now", &Plugin::ApiNow);
 	set("toast", &Plugin::ApiToast);
 	lua_newtable(_lua);
 	set("send", &Plugin::ApiSendMessage);
+	set("send_file", &Plugin::ApiSendFile);
 	set("edit", &Plugin::ApiEditMessage);
 	set("delete", &Plugin::ApiDeleteMessages);
 	set("get", &Plugin::ApiGetMessage);
@@ -622,7 +855,25 @@ void Plugin::registerApi() {
 	set("confirm", &Plugin::ApiConfirm);
 	set("input", &Plugin::ApiInput);
 	set("copy", &Plugin::ApiCopy);
+	set("dialog", &Plugin::ApiDialog);
+	set("current", &Plugin::ApiCurrent);
+	set("open", &Plugin::ApiOpen);
+	set("color", &Plugin::ApiColor);
+	set("image", &Plugin::ApiImage);
+	set("image_free", &Plugin::ApiImageFree);
+	set("overlay", &Plugin::ApiOverlay);
+	set("window_size", &Plugin::ApiWindowSize);
 	lua_setfield(_lua, -2, "ui");
+	lua_newtable(_lua);
+	set("state", &Plugin::ApiPlayerState);
+	set("toggle", &Plugin::ApiPlayerToggle);
+	set("play", &Plugin::ApiPlayerPlay);
+	set("pause", &Plugin::ApiPlayerPause);
+	set("next", &Plugin::ApiPlayerNext);
+	set("previous", &Plugin::ApiPlayerPrevious);
+	set("stop", &Plugin::ApiPlayerStop);
+	set("seek", &Plugin::ApiPlayerSeek);
+	lua_setfield(_lua, -2, "player");
 	set("async", &Plugin::ApiAsync);
 	lua_newtable(_lua);
 	set("after", &Plugin::ApiTimerAfter);
@@ -1427,34 +1678,40 @@ int Plugin::ApiOn(lua_State *L) {
 	return 0;
 }
 
+// plugin.menu(place, text, fn) or plugin.menu{ place, text, icon,
+// section, on_click, page } -> id for plugin.menu_remove(id)
 int Plugin::ApiMenu(lua_State *L) {
 	const auto plugin = From(L);
 	plugin->requirePermission(L, kPermUi);
-	const auto place = CheckString(L, 1);
-	const auto text = CheckString(L, 2);
-	luaL_checktype(L, 3, LUA_TFUNCTION);
-	auto entry = MenuEntry{ .text = text };
-	if (place == u"message"_q) {
-		entry.place = MenuPlace::Message;
-	} else if (place == u"main"_q) {
-		entry.place = MenuPlace::Main;
-	} else if (place == u"chat"_q) {
-		entry.place = MenuPlace::Chat;
-	} else if (place == u"profile"_q) {
-		entry.place = MenuPlace::Profile;
+	auto entry = MenuEntry();
+	if (lua_istable(L, 1)) {
+		entry = plugin->readMenuEntry(L, 1);
 	} else {
-		return luaL_error(L, "unknown menu: %s", place.toUtf8().constData());
+		const auto place = CheckString(L, 1);
+		entry.text = CheckString(L, 2);
+		luaL_checktype(L, 3, LUA_TFUNCTION);
+		if (const auto found = ParseMenuPlace(place)) {
+			entry.place = *found;
+		} else {
+			return luaL_error(
+				L,
+				"unknown menu: %s",
+				place.toUtf8().constData());
+		}
+		if (entry.text.isEmpty()) {
+			return luaL_error(L, "menu item text is empty");
+		}
+		lua_pushvalue(L, 3);
+		entry.ref = luaL_ref(L, LUA_REGISTRYINDEX);
 	}
-	if (text.isEmpty()) {
-		return luaL_error(L, "menu item text is empty");
-	}
-	lua_pushvalue(L, 3);
-	entry.ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	entry.id = ++plugin->_nextMenuId;
+	const auto id = entry.id;
 	plugin->_menu.push_back(std::move(entry));
 	crl::on_main(plugin, [host = plugin->_host] {
 		host->refreshHooks();
 	});
-	return 0;
+	lua_pushinteger(L, id);
+	return 1;
 }
 
 int Plugin::ApiSettingsGet(lua_State *L) {
@@ -1505,14 +1762,38 @@ int Plugin::ApiSettingsSet(lua_State *L) {
 	return 0;
 }
 
+// tg.toast("text") or tg.toast{ text, title, duration = ms }
 int Plugin::ApiToast(lua_State *L) {
 	const auto plugin = From(L);
 	plugin->requirePermission(L, kPermUi);
-	const auto text = CheckString(L, 1);
+	auto text = QString();
+	auto title = QString();
+	auto duration = crl::time(0);
+	if (lua_istable(L, 1)) {
+		text = StringField(L, 1, "text");
+		title = StringField(L, 1, "title");
+		lua_getfield(L, 1, "duration");
+		if (lua_isinteger(L, -1)) {
+			duration = std::clamp(
+				crl::time(lua_tointeger(L, -1)),
+				crl::time(500),
+				crl::time(60000));
+		}
+		lua_pop(L, 1);
+	} else {
+		text = CheckString(L, 1);
+	}
 	crl::on_main(plugin, [=] {
 		if (const auto window = Core::App().activeWindow()) {
 			if (const auto controller = window->sessionController()) {
-				controller->showToast(text);
+				auto config = Ui::Toast::Config{
+					.title = title,
+					.text = TextWithEntities{ text },
+				};
+				if (duration) {
+					config.duration = duration;
+				}
+				controller->showToast(std::move(config));
 			}
 		}
 	});
@@ -1528,8 +1809,10 @@ int Plugin::ApiSendMessage(lua_State *L) {
 	auto replyTo = MsgId();
 	auto silent = false;
 	auto scheduled = TimeId();
+	auto mode = QString();
 	if (!lua_isnoneornil(L, 3)) {
 		luaL_checktype(L, 3, LUA_TTABLE);
+		mode = StringField(L, 3, "parse_mode").toLower();
 		lua_getfield(L, 3, "reply_to");
 		if (lua_isinteger(L, -1)) {
 			replyTo = MsgId(lua_tointeger(L, -1));
@@ -1561,7 +1844,7 @@ int Plugin::ApiSendMessage(lua_State *L) {
 			};
 		}
 		auto message = Api::MessageToSend(std::move(action));
-		message.textWithTags = TextWithTags{ text };
+		message.textWithTags = ToTags(Formatted(text, mode));
 		const auto bypass = Plugins::BypassScope();
 		session->api().sendMessage(std::move(message));
 	});
@@ -2111,6 +2394,9 @@ int Plugin::ApiEditMessage(lua_State *L) {
 	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
 	const auto msgId = MsgId(luaL_checkinteger(L, 2));
 	const auto text = CheckString(L, 3);
+	const auto mode = lua_istable(L, 4)
+		? StringField(L, 4, "parse_mode").toLower()
+		: QString();
 	const auto session = ActiveSession();
 	const auto itemId = FullMsgId(peerId, msgId);
 	const auto item = session ? session->data().message(itemId) : nullptr;
@@ -2125,7 +2411,7 @@ int Plugin::ApiEditMessage(lua_State *L) {
 		}
 		Api::EditTextMessage(
 			item,
-			TextWithEntities{ text },
+			Formatted(text, mode),
 			Data::WebPageDraft::FromItem(item),
 			Api::SendOptions(),
 			[](mtpRequestId) {},
@@ -2533,6 +2819,1075 @@ int Plugin::ApiFileList(lua_State *L) {
 		lua_rawseti(L, -2, ++index);
 	}
 	return 1;
+}
+
+// Pages, menus anywhere, canvas, overlays, dialogs (API 2 of the UI).
+
+int Plugin::generation() const {
+	return _generation;
+}
+
+bool Plugin::hasSettingsPage() const {
+	return _lua && (_settingsPage != kNoRef);
+}
+
+rpl::producer<> Plugin::pageRefreshes() const {
+	return _pageRefreshes.events();
+}
+
+QJsonValue Plugin::setting(const QString &key) const {
+	return _settings.value(key);
+}
+
+void Plugin::setSetting(const QString &key, const QJsonValue &value) {
+	if (value.isUndefined() || value.isNull()) {
+		_settings.remove(key);
+	} else {
+		_settings.insert(key, value);
+	}
+	saveSettings();
+}
+
+MenuEntry Plugin::readMenuEntry(lua_State *L, int index) {
+	auto entry = MenuEntry();
+	const auto place = StringField(L, index, "place");
+	auto section = StringField(L, index, "section");
+	if (place.startsWith(u"settings"_q)) {
+		entry.place = MenuPlace::Settings;
+		if (place.startsWith(u"settings."_q)) {
+			section = place.mid(9);
+		}
+		entry.section = section.isEmpty() ? u"main"_q : section;
+	} else if (const auto found = ParseMenuPlace(place)) {
+		entry.place = *found;
+	} else {
+		luaL_error(L, "unknown menu place: %s", place.toUtf8().constData());
+	}
+	entry.text = StringField(L, index, "text");
+	if (entry.text.isEmpty()) {
+		luaL_error(L, "menu item text is empty");
+	}
+	entry.icon = StringField(L, index, "icon");
+	if (!entry.icon.isEmpty() && !IconByName(entry.icon)) {
+		luaL_error(L, "unknown icon: %s", entry.icon.toUtf8().constData());
+	}
+	lua_getfield(L, index, "on_click");
+	if (lua_isfunction(L, -1)) {
+		entry.ref = luaL_ref(L, LUA_REGISTRYINDEX);
+	} else {
+		lua_pop(L, 1);
+	}
+	lua_getfield(L, index, "page");
+	if (lua_isfunction(L, -1)) {
+		entry.page = luaL_ref(L, LUA_REGISTRYINDEX);
+		_pageBuilders.emplace(entry.page);
+	} else {
+		lua_pop(L, 1);
+	}
+	if (entry.ref == kNoRef && entry.page == kNoRef) {
+		luaL_error(L, "a menu item needs on_click or page");
+	}
+	return entry;
+}
+
+int Plugin::ApiMenuRemove(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	const auto id = int(luaL_checkinteger(L, 1));
+	const auto i = ranges::find(plugin->_menu, id, &MenuEntry::id);
+	if (i == end(plugin->_menu)) {
+		lua_pushboolean(L, 0);
+		return 1;
+	}
+	if (i->ref != kNoRef) {
+		luaL_unref(L, LUA_REGISTRYINDEX, i->ref);
+	}
+	// i->page stays: a page opened from the item may still be shown.
+	plugin->_menu.erase(i);
+	crl::on_main(plugin, [host = plugin->_host] {
+		host->refreshHooks();
+	});
+	lua_pushboolean(L, 1);
+	return 1;
+}
+
+// plugin.settings.page(function() return { rows } end)
+int Plugin::ApiSettingsPage(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	if (lua_isnil(L, 1)) {
+		if (plugin->_settingsPage != kNoRef) {
+			luaL_unref(L, LUA_REGISTRYINDEX, plugin->_settingsPage);
+			plugin->_settingsPage = kNoRef;
+		}
+	} else {
+		luaL_checktype(L, 1, LUA_TFUNCTION);
+		if (plugin->_settingsPage != kNoRef) {
+			luaL_unref(L, LUA_REGISTRYINDEX, plugin->_settingsPage);
+		}
+		lua_pushvalue(L, 1);
+		plugin->_settingsPage = luaL_ref(L, LUA_REGISTRYINDEX);
+	}
+	crl::on_main(plugin, [=] {
+		plugin->_host->notifyChanged();
+		plugin->_pageRefreshes.fire({});
+	});
+	return 0;
+}
+
+int Plugin::ApiSettingsRefresh(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	// Not now: the page may call this from its own handler.
+	crl::on_main(plugin, [=] {
+		plugin->_pageRefreshes.fire({});
+	});
+	return 0;
+}
+
+int Plugin::ApiSettingsAll(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermStorage);
+	lua_createtable(L, 0, int(plugin->_settings.size()));
+	for (auto i = plugin->_settings.begin(); i != plugin->_settings.end(); ++i) {
+		PushString(L, i.key());
+		PushJson(L, i.value(), 0);
+		lua_settable(L, -3);
+	}
+	return 1;
+}
+
+int Plugin::ApiSettingsReset(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermStorage);
+	plugin->_settings = QJsonObject();
+	plugin->saveSettings();
+	crl::on_main(plugin, [=] {
+		plugin->_pageRefreshes.fire({});
+	});
+	return 0;
+}
+
+void Plugin::readPage(lua_State *L, int index, Page &page) {
+	luaL_checktype(L, index, LUA_TTABLE);
+	page.title = StringField(L, index, "title");
+	const auto count = int(lua_rawlen(L, index));
+	if (count > kMaxPageRows) {
+		luaL_error(L, "a page has more than %d rows", kMaxPageRows);
+	}
+	const auto ref = [&](lua_State *L, int row, const char *name) {
+		lua_getfield(L, row, name);
+		if (!lua_isfunction(L, -1)) {
+			lua_pop(L, 1);
+			return kNoRef;
+		}
+		const auto result = luaL_ref(L, LUA_REGISTRYINDEX);
+		page.refs.push_back(result);
+		return result;
+	};
+	const auto number = [&](lua_State *L, int row, const char *name, double fallback) {
+		lua_getfield(L, row, name);
+		const auto result = lua_isnumber(L, -1)
+			? double(lua_tonumber(L, -1))
+			: fallback;
+		lua_pop(L, 1);
+		return result;
+	};
+	const auto flag = [&](lua_State *L, int row, const char *name) {
+		lua_getfield(L, row, name);
+		const auto result = lua_toboolean(L, -1) != 0;
+		lua_pop(L, 1);
+		return result;
+	};
+	for (auto i = 1; i <= count; ++i) {
+		lua_rawgeti(L, index, i);
+		if (!lua_istable(L, -1)) {
+			luaL_error(L, "row %d of the page is not a table", i);
+		}
+		const auto row = lua_gettop(L);
+		auto item = PageItem();
+		const auto type = StringField(L, row, "type");
+		using Type = PageItem::Type;
+		if (type == u"header"_q) {
+			item.type = Type::Header;
+		} else if (type == u"divider"_q) {
+			item.type = Type::Divider;
+		} else if (type == u"switch"_q) {
+			item.type = Type::Switch;
+		} else if (type == u"selector"_q) {
+			item.type = Type::Selector;
+		} else if (type == u"input"_q) {
+			item.type = Type::Input;
+		} else if (type == u"text"_q || type.isEmpty()) {
+			item.type = Type::Text;
+		} else if (type == u"slider"_q) {
+			item.type = Type::Slider;
+		} else if (type == u"custom"_q) {
+			item.type = Type::Custom;
+		} else {
+			luaL_error(L, "row %d: unknown type %s", i, type.toUtf8().constData());
+		}
+		item.key = StringField(L, row, "key");
+		item.text = StringField(L, row, "text");
+		item.subtext = StringField(L, row, "subtext");
+		item.icon = StringField(L, row, "icon");
+		item.placeholder = StringField(L, row, "placeholder");
+		if (!item.icon.isEmpty() && !IconByName(item.icon)) {
+			luaL_error(L, "row %d: unknown icon %s", i, item.icon.toUtf8().constData());
+		}
+		item.accent = flag(L, row, "accent");
+		item.red = flag(L, row, "red");
+		item.min = number(L, row, "min", 0.);
+		item.max = number(L, row, "max", 100.);
+		item.step = std::max(number(L, row, "step", 1.), 1e-9);
+		item.height = int(number(L, row, "height", 0.));
+		lua_getfield(L, row, "items");
+		if (lua_istable(L, -1)) {
+			const auto items = lua_gettop(L);
+			const auto size = std::min(int(lua_rawlen(L, items)), kMaxPageRows);
+			for (auto j = 1; j <= size; ++j) {
+				lua_rawgeti(L, items, j);
+				item.items.push_back(ToString(L, -1));
+				lua_pop(L, 1);
+			}
+		}
+		lua_pop(L, 1);
+		lua_getfield(L, row, "default");
+		switch (lua_type(L, -1)) {
+		case LUA_TBOOLEAN:
+			item.fallback = (lua_toboolean(L, -1) != 0);
+			break;
+		case LUA_TNUMBER:
+			item.fallback = double(lua_tonumber(L, -1));
+			break;
+		case LUA_TSTRING:
+			item.fallback = ToString(L, -1);
+			break;
+		}
+		lua_pop(L, 1);
+		item.onChange = ref(L, row, "on_change");
+		item.onClick = ref(L, row, "on_click");
+		lua_getfield(L, row, "page");
+		if (lua_isfunction(L, -1)) {
+			item.page = luaL_ref(L, LUA_REGISTRYINDEX);
+			_pageBuilders.emplace(item.page);
+		} else {
+			lua_pop(L, 1);
+		}
+		item.paint = ref(L, row, "paint");
+
+		const auto keyed = (item.type == Type::Switch)
+			|| (item.type == Type::Selector)
+			|| (item.type == Type::Input)
+			|| (item.type == Type::Slider);
+		if (keyed && item.key.isEmpty()) {
+			luaL_error(L, "row %d: a %s needs a key", i, type.toUtf8().constData());
+		} else if (item.type == Type::Selector && item.items.empty()) {
+			luaL_error(L, "row %d: a selector needs items", i);
+		} else if (item.type == Type::Custom
+			&& (item.paint == kNoRef
+				|| item.height <= 0
+				|| item.height > kMaxCustomHeight)) {
+			luaL_error(
+				L,
+				"row %d: a custom row needs paint and a height 1..%d",
+				i,
+				kMaxCustomHeight);
+		} else if (item.type == Type::Slider && !(item.max > item.min)) {
+			luaL_error(L, "row %d: a slider needs max > min", i);
+		} else if (item.text.isEmpty()
+			&& item.type != Type::Divider
+			&& item.type != Type::Custom) {
+			luaL_error(L, "row %d has no text", i);
+		}
+		page.items.push_back(std::move(item));
+		lua_pop(L, 1);
+	}
+}
+
+std::optional<Page> Plugin::buildPage(int ref, QString *error) {
+	const auto fail = [&](const QString &text) {
+		if (error) {
+			*error = text;
+		}
+		return std::optional<Page>();
+	};
+	if (!_lua) {
+		return fail(u"the plugin is not running"_q);
+	}
+	const auto builder = (ref == kNoRef) ? _settingsPage : ref;
+	if (builder == kNoRef) {
+		return fail(u"the plugin has no settings page"_q);
+	} else if (ref != kNoRef && !_pageBuilders.contains(ref)) {
+		return fail(u"the page is gone"_q);
+	}
+	auto page = Page{ .generation = _generation };
+	lua_rawgeti(_lua, LUA_REGISTRYINDEX, builder);
+	if (!call(0, 1, kClickBudget)) {
+		return fail(_lastError);
+	}
+	auto readError = QString();
+	const auto read = protect(1, 0, [&](lua_State *L) {
+		readPage(L, 1, page);
+	}, &readError);
+	if (!read) {
+		if (_lua) {
+			for (const auto handler : page.refs) {
+				luaL_unref(_lua, LUA_REGISTRYINDEX, handler);
+			}
+		}
+		addToJournal(u"ERROR: page: "_q + readError);
+		return fail(readError);
+	}
+	return page;
+}
+
+void Plugin::releasePage(const Page &page) {
+	if (!_lua || page.generation != _generation) {
+		return;
+	}
+	for (const auto handler : page.refs) {
+		luaL_unref(_lua, LUA_REGISTRYINDEX, handler);
+	}
+}
+
+void Plugin::pageCallback(
+		int generation,
+		int ref,
+		const QJsonValue &value) {
+	if (!_lua || generation != _generation || ref == kNoRef) {
+		return;
+	}
+	lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+	if (value.isUndefined()) {
+		call(0, 0, kClickBudget);
+	} else {
+		auto pushed = protect(0, 1, [&](lua_State *L) {
+			PushJson(L, value, 0);
+		});
+		if (!pushed) {
+			lua_pop(_lua, 1);
+			return;
+		}
+		call(1, 0, kClickBudget);
+	}
+}
+
+void Plugin::paintCanvas(
+		int generation,
+		int ref,
+		QPainter &p,
+		QSize size) {
+	if (!_lua || generation != _generation || ref == kNoRef || _running) {
+		return;
+	}
+	lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
+	PushCanvas(_lua, &p, size, &_imageLookup);
+	lua_pushvalue(_lua, -1);
+	lua_insert(_lua, -3); // canvas, function, canvas
+	p.save();
+	call(1, 0, kPaintBudget);
+	p.restore();
+	if (_lua) {
+		InvalidateCanvas(_lua, -1);
+		lua_pop(_lua, 1);
+	}
+}
+
+// tg.ui.dialog{ title, text, items = { ... }, buttons = { ... }, danger }
+// -> the number of the chosen item or button, nil if closed.
+int Plugin::ApiDialog(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	luaL_checktype(L, 1, LUA_TTABLE);
+	const auto title = StringField(L, 1, "title");
+	const auto text = StringField(L, 1, "text");
+	const auto list = [&](const char *name) {
+		auto result = std::vector<QString>();
+		lua_getfield(L, 1, name);
+		if (lua_istable(L, -1)) {
+			const auto size = std::min(int(lua_rawlen(L, -1)), kMaxPageRows);
+			for (auto i = 1; i <= size; ++i) {
+				lua_rawgeti(L, -1, i);
+				result.push_back(ToString(L, -1));
+				lua_pop(L, 1);
+			}
+		}
+		lua_pop(L, 1);
+		return result;
+	};
+	const auto items = list("items");
+	auto buttons = list("buttons");
+	if (buttons.size() > 3) {
+		return luaL_error(L, "a dialog has up to 3 buttons");
+	}
+	lua_getfield(L, 1, "danger");
+	const auto danger = lua_isinteger(L, -1) ? int(lua_tointeger(L, -1)) : 0;
+	lua_pop(L, 1);
+	const auto waiter = plugin->waiter(L, 2, "tg.ui.dialog");
+	const auto weak = base::make_weak(plugin);
+	crl::on_main(plugin, [=] {
+		const auto answered = std::make_shared<bool>(false);
+		const auto finish = [=](int value) {
+			if (*answered) {
+				return;
+			}
+			*answered = true;
+			if (const auto strong = weak.get()) {
+				strong->answer(waiter, [=](lua_State *L) {
+					if (value > 0) {
+						lua_pushinteger(L, value);
+					} else {
+						lua_pushnil(L);
+					}
+				});
+			}
+		};
+		const auto controller = ActiveController();
+		if (!controller) {
+			finish(0);
+			return;
+		}
+		controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+			if (!title.isEmpty()) {
+				box->setTitle(rpl::single(title));
+			}
+			if (!text.isEmpty()) {
+				box->addRow(
+					object_ptr<Ui::FlatLabel>(box, text, st::boxLabel));
+			}
+			for (auto i = 0; i != int(items.size()); ++i) {
+				const auto button = box->addRow(
+					object_ptr<Ui::SettingsButton>(
+						box,
+						rpl::single(items[i]),
+						st::defaultSettingsButton),
+					style::margins());
+				button->setClickedCallback([=] {
+					finish(i + 1);
+					box->closeBox();
+				});
+			}
+			const auto shown = buttons.empty()
+				? std::vector<QString>{ items.empty()
+					? tr::lng_box_ok(tr::now)
+					: tr::lng_cancel(tr::now) }
+				: buttons;
+			for (auto i = 0; i != int(shown.size()); ++i) {
+				const auto chosen = buttons.empty() ? 0 : (i + 1);
+				const auto clicked = [=] {
+					finish(chosen);
+					box->closeBox();
+				};
+				if (chosen && chosen == danger) {
+					box->addButton(
+						rpl::single(shown[i]),
+						clicked,
+						st::attentionBoxButton);
+				} else {
+					box->addButton(rpl::single(shown[i]), clicked);
+				}
+			}
+			box->boxClosing() | rpl::on_next([=] {
+				finish(0);
+			}, box->lifetime());
+		}));
+	});
+	return plugin->wait(L, waiter);
+}
+
+// tg.ui.current() -> { screen, peer, title, window }
+int Plugin::ApiCurrent(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermChatsRead);
+	lua_createtable(L, 0, 4);
+	const auto window = Core::App().activeWindow();
+	const auto controller = window ? window->sessionController() : nullptr;
+	if (window) {
+		PushString(L, window->widget()->windowTitle());
+		lua_setfield(L, -2, "window");
+	}
+	const auto peer = controller
+		? controller->activeChatCurrent().peer()
+		: nullptr;
+	PushString(L, !controller
+		? u"none"_q
+		: peer
+		? u"chat"_q
+		: u"chats"_q);
+	lua_setfield(L, -2, "screen");
+	if (peer) {
+		lua_pushinteger(L, BotApiId(peer->id));
+		lua_setfield(L, -2, "peer");
+		PushString(L, peer->name());
+		lua_setfield(L, -2, "title");
+	}
+	return 1;
+}
+
+// tg.ui.open(chat id | "@username" | "https://t.me/..." | "tg://...")
+int Plugin::ApiOpen(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	if (lua_isinteger(L, 1)) {
+		const auto peerId = FromBotApiId(int64(lua_tointeger(L, 1)));
+		crl::on_main(plugin, [=] {
+			if (const auto controller = ActiveController()) {
+				if (const auto peer = controller->session().data().peerLoaded(peerId)) {
+					controller->showPeerHistory(peer);
+				}
+			}
+		});
+		return 0;
+	}
+	const auto target = CheckString(L, 1).trimmed();
+	crl::on_main(plugin, [=] {
+		if (target.startsWith(u'@')) {
+			if (const auto controller = ActiveController()) {
+				controller->showPeerByLink(Window::PeerByLinkInfo{
+					.usernameOrId = target.mid(1),
+				});
+			}
+		} else if (!target.isEmpty()) {
+			UrlClickHandler::Open(target);
+		}
+	});
+	return 0;
+}
+
+// tg.ui.color("windowBg") -> "#aarrggbb" of the current theme
+int Plugin::ApiColor(lua_State *L) {
+	const auto name = CheckString(L, 1);
+	if (const auto color = ThemeColor(name)) {
+		PushString(L, color->name(QColor::HexArgb));
+	} else {
+		lua_pushnil(L);
+	}
+	return 1;
+}
+
+// tg.ui.image(bytes) -> id, width, height (PNG, JPEG, WebP, GIF frame)
+int Plugin::ApiImage(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	auto size = size_t(0);
+	const auto data = luaL_checklstring(L, 1, &size);
+	if (int(plugin->_images.size()) >= kMaxImages) {
+		return luaL_error(L, "a plugin keeps up to %d images", kMaxImages);
+	}
+	auto image = QImage::fromData(QByteArray(data, int(size)));
+	if (image.isNull()) {
+		lua_pushnil(L);
+		return 1;
+	}
+	if (image.width() > kMaxImageSide || image.height() > kMaxImageSide) {
+		image = image.scaled(
+			kMaxImageSide,
+			kMaxImageSide,
+			Qt::KeepAspectRatio,
+			Qt::SmoothTransformation);
+	}
+	image = std::move(image).convertToFormat(
+		QImage::Format_ARGB32_Premultiplied);
+	const auto id = ++plugin->_nextImageId;
+	lua_pushinteger(L, id);
+	lua_pushinteger(L, image.width());
+	lua_pushinteger(L, image.height());
+	plugin->_images.emplace(id, std::move(image));
+	return 3;
+}
+
+int Plugin::ApiImageFree(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	plugin->_images.erase(int(luaL_checkinteger(L, 1)));
+	return 0;
+}
+
+namespace {
+
+[[nodiscard]] Qt::Corner ReadCorner(
+		lua_State *L,
+		int index,
+		Qt::Corner fallback) {
+	lua_getfield(L, index, "corner");
+	const auto corner = ToString(L, -1);
+	lua_pop(L, 1);
+	if (corner == u"top-left"_q) {
+		return Qt::TopLeftCorner;
+	} else if (corner == u"top-right"_q) {
+		return Qt::TopRightCorner;
+	} else if (corner == u"bottom-left"_q) {
+		return Qt::BottomLeftCorner;
+	} else if (corner == u"bottom-right"_q) {
+		return Qt::BottomRightCorner;
+	}
+	return fallback;
+}
+
+[[nodiscard]] QRect ReadGeometry(lua_State *L, int index, QRect fallback) {
+	const auto field = [&](const char *name, int value) {
+		lua_getfield(L, index, name);
+		const auto result = lua_isnumber(L, -1)
+			? int(lua_tointeger(L, -1))
+			: value;
+		lua_pop(L, 1);
+		return result;
+	};
+	return QRect(
+		field("x", fallback.x()),
+		field("y", fallback.y()),
+		std::clamp(field("width", fallback.width()), 1, kMaxOverlaySide),
+		std::clamp(field("height", fallback.height()), 1, kMaxOverlaySide));
+}
+
+// The table of o:update() / o:move{...} / o:close(): the last argument.
+[[nodiscard]] int OverlayId(lua_State *L) {
+	return int(lua_tointeger(L, lua_upvalueindex(1)));
+}
+
+} // namespace
+
+// tg.ui.overlay{ x, y, width, height, corner, paint, on_click }
+// -> { id, update(), move{ x, y, width, height, corner }, close() }
+int Plugin::ApiOverlay(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	luaL_checktype(L, 1, LUA_TTABLE);
+	if (int(plugin->_overlays.size()) >= kMaxOverlays) {
+		return luaL_error(L, "a plugin shows up to %d overlays", kMaxOverlays);
+	}
+	const auto window = Core::App().activeWindow();
+	const auto body = window ? window->widget()->bodyWidget() : nullptr;
+	if (!body) {
+		lua_pushnil(L);
+		return 1;
+	}
+	const auto geometry = ReadGeometry(L, 1, QRect(0, 0, 100, 40));
+	const auto corner = ReadCorner(L, 1, Qt::TopLeftCorner);
+	lua_getfield(L, 1, "paint");
+	luaL_checktype(L, -1, LUA_TFUNCTION);
+	const auto paint = luaL_ref(L, LUA_REGISTRYINDEX);
+	lua_getfield(L, 1, "on_click");
+	const auto click = lua_isfunction(L, -1)
+		? luaL_ref(L, LUA_REGISTRYINDEX)
+		: (lua_pop(L, 1), kNoRef);
+
+	const auto id = ++plugin->_nextOverlayId;
+	const auto weak = base::make_weak(plugin);
+	auto &state = plugin->_overlays[id];
+	state.geometry = geometry;
+	state.corner = corner;
+	state.paint = paint;
+	state.click = click;
+	state.widget = CreateOverlay(body, {
+		.geometry = geometry,
+		.corner = corner,
+		.clickThrough = (click == kNoRef),
+		.paint = [=](QPainter &p, QSize size) {
+			if (const auto strong = weak.get()) {
+				strong->paintOverlay(id, p, size);
+			}
+		},
+		.click = [=](QPoint point) {
+			if (const auto strong = weak.get()) {
+				strong->clickOverlay(id, point);
+			}
+		},
+	});
+
+	lua_createtable(L, 0, 4);
+	lua_pushinteger(L, id);
+	lua_setfield(L, -2, "id");
+	const auto method = [&](const char *name, lua_CFunction function) {
+		lua_pushinteger(L, id);
+		lua_pushcclosure(L, function, 1);
+		lua_setfield(L, -2, name);
+	};
+	method("update", &Plugin::OverlayUpdate);
+	method("move", &Plugin::OverlayMove);
+	method("close", &Plugin::OverlayClose);
+	return 1;
+}
+
+int Plugin::OverlayUpdate(lua_State *L) {
+	const auto plugin = From(L);
+	const auto i = plugin->_overlays.find(OverlayId(L));
+	if (i != end(plugin->_overlays) && i->second.widget) {
+		i->second.widget->update();
+	}
+	return 0;
+}
+
+int Plugin::OverlayMove(lua_State *L) {
+	const auto plugin = From(L);
+	const auto i = plugin->_overlays.find(OverlayId(L));
+	const auto index = lua_gettop(L);
+	if (i == end(plugin->_overlays) || !lua_istable(L, index)) {
+		return 0;
+	}
+	auto &state = i->second;
+	state.geometry = ReadGeometry(L, index, state.geometry);
+	state.corner = ReadCorner(L, index, state.corner);
+	if (state.widget) {
+		MoveOverlay(state.widget.get(), state.geometry, state.corner);
+	}
+	return 0;
+}
+
+int Plugin::OverlayClose(lua_State *L) {
+	From(L)->closeOverlay(OverlayId(L));
+	return 0;
+}
+
+void Plugin::closeOverlay(int id) {
+	const auto i = _overlays.find(id);
+	if (i == end(_overlays)) {
+		return;
+	}
+	if (_lua) {
+		luaL_unref(_lua, LUA_REGISTRYINDEX, i->second.paint);
+		luaL_unref(_lua, LUA_REGISTRYINDEX, i->second.click);
+	}
+	// Not right now: it may be closed from its own click.
+	if (const auto widget = i->second.widget.release()) {
+		widget->hide();
+		widget->deleteLater();
+	}
+	_overlays.erase(i);
+}
+
+void Plugin::paintOverlay(int id, QPainter &p, QSize size) {
+	const auto i = _overlays.find(id);
+	if (i != end(_overlays)) {
+		paintCanvas(_generation, i->second.paint, p, size);
+	}
+}
+
+void Plugin::clickOverlay(int id, QPoint point) {
+	const auto i = _overlays.find(id);
+	if (!_lua || i == end(_overlays) || i->second.click == kNoRef) {
+		return;
+	}
+	lua_rawgeti(_lua, LUA_REGISTRYINDEX, i->second.click);
+	lua_pushinteger(_lua, point.x());
+	lua_pushinteger(_lua, point.y());
+	call(2, 0, kClickBudget);
+}
+
+// tg.messages.send_file(peer, { bytes, name, caption, photo, silent })
+int Plugin::ApiSendFile(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermMessagesSend);
+	const auto peerId = FromBotApiId(int64(luaL_checkinteger(L, 1)));
+	luaL_checktype(L, 2, LUA_TTABLE);
+	lua_getfield(L, 2, "bytes");
+	auto size = size_t(0);
+	const auto data = luaL_checklstring(L, -1, &size);
+	if (size == 0 || qint64(size) > kMaxFile) {
+		return luaL_error(L, "a file to send is 1 byte to 16 MB");
+	}
+	const auto bytes = QByteArray(data, int(size));
+	lua_pop(L, 1);
+	auto name = StringField(L, 2, "name");
+	name.replace(QRegularExpression(u"[^A-Za-z0-9_.\\- ]"_q), u"_"_q);
+	if (name.isEmpty() || name.startsWith(u'.')) {
+		name = u"file"_q + name;
+	}
+	const auto caption = StringField(L, 2, "caption");
+	lua_getfield(L, 2, "photo");
+	const auto photo = lua_toboolean(L, -1) != 0;
+	lua_getfield(L, 2, "silent");
+	const auto silent = lua_toboolean(L, -1) != 0;
+	lua_pop(L, 2);
+
+	const auto session = ActiveSession();
+	if (!peerId || !session) {
+		lua_pushboolean(L, 0);
+		return 1;
+	}
+	// A folder per file: two files of one name do not meet.
+	const auto folder = plugin->_dataPath
+		+ u"outbox/"_q
+		+ QString::number(++plugin->_nextImageId)
+		+ u'_'
+		+ QString::number(crl::now())
+		+ u'/';
+	QDir().mkpath(folder);
+	const auto path = folder + name;
+	auto file = QFile(path);
+	if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size()) {
+		lua_pushboolean(L, 0);
+		return 1;
+	}
+	file.close();
+	crl::on_main(session, [=] {
+		auto list = Storage::PrepareMediaList(
+			QStringList{ path },
+			st::sendMediaPreviewSize,
+			session->premium());
+		if (list.error != Ui::PreparedList::Error::None
+			|| list.files.empty()) {
+			LOG(("Plugins: could not send %1").arg(path));
+			return;
+		}
+		if (!caption.isEmpty()) {
+			list.files.front().caption = TextWithTags{ caption };
+		}
+		const auto history = session->data().history(peerId);
+		auto action = Api::SendAction(history);
+		action.options.silent = silent;
+		const auto bypass = Plugins::BypassScope();
+		session->api().sendFiles(
+			std::move(list),
+			(photo ? SendMediaType::Photo : SendMediaType::File),
+			nullptr,
+			action);
+	});
+	lua_pushboolean(L, 1);
+	return 1;
+}
+
+namespace {
+
+void DumpValue(
+		lua_State *L,
+		int index,
+		int depth,
+		QString &out,
+		base::flat_set<const void*> &seen) {
+	index = lua_absindex(L, index);
+	switch (lua_type(L, index)) {
+	case LUA_TNIL: out += u"nil"_q; return;
+	case LUA_TBOOLEAN:
+		out += lua_toboolean(L, index) ? u"true"_q : u"false"_q;
+		return;
+	case LUA_TNUMBER:
+		out += lua_isinteger(L, index)
+			? QString::number(lua_tointeger(L, index))
+			: QString::number(lua_tonumber(L, index), 'g', 14);
+		return;
+	case LUA_TSTRING: {
+		auto text = ToString(L, index);
+		if (text.size() > 200) {
+			text = text.left(200) + u"…"_q;
+		}
+		out += u'"' + text.replace(u'"', u"\\\""_q) + u'"';
+		return;
+	}
+	case LUA_TTABLE: break;
+	default:
+		out += QString::fromLatin1(luaL_typename(L, index));
+		return;
+	}
+	const auto pointer = lua_topointer(L, index);
+	if (!seen.emplace(pointer).second) {
+		out += u"<cycle>"_q;
+		return;
+	} else if (depth >= kMaxDumpDepth) {
+		out += u"{…}"_q;
+		return;
+	}
+	const auto indent = QString(depth + 1, u'\t');
+	out += u"{\n"_q;
+	auto shown = 0;
+	lua_pushnil(L);
+	while (lua_next(L, index)) {
+		if (++shown > kMaxDumpItems) {
+			out += indent + u"…\n"_q;
+			lua_pop(L, 2);
+			break;
+		}
+		out += indent;
+		if (lua_type(L, -2) == LUA_TSTRING) {
+			out += ToString(L, -2);
+		} else {
+			out += u'[';
+			DumpValue(L, -2, depth + 1, out, seen);
+			out += u']';
+		}
+		out += u" = "_q;
+		DumpValue(L, -1, depth + 1, out, seen);
+		out += u",\n"_q;
+		lua_pop(L, 1);
+	}
+	out += QString(depth, u'\t') + u'}';
+}
+
+} // namespace
+
+// tg.dump(value) -> readable text of a value, tables with their fields.
+int Plugin::ApiDump(lua_State *L) {
+	luaL_checkany(L, 1);
+	luaL_checkstack(L, kMaxDumpDepth * 3 + 8, "tg.dump");
+	auto out = QString();
+	auto seen = base::flat_set<const void*>();
+	DumpValue(L, 1, 0, out, seen);
+	PushString(L, out);
+	return 1;
+}
+
+// tg.now() -> milliseconds of a steady clock, for animations.
+int Plugin::ApiNow(lua_State *L) {
+	lua_pushinteger(L, lua_Integer(crl::now()));
+	return 1;
+}
+
+// tg.ui.window_size() -> width, height of the window body in unscaled
+// pixels, nil without a window.
+int Plugin::ApiWindowSize(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermUi);
+	const auto window = Core::App().activeWindow();
+	const auto body = window ? window->widget()->bodyWidget() : nullptr;
+	if (!body) {
+		lua_pushnil(L);
+		return 1;
+	}
+	const auto size = body->size();
+	const auto scale = style::Scale() / 100.;
+	lua_pushinteger(L, lua_Integer(std::round(size.width() / scale)));
+	lua_pushinteger(L, lua_Integer(std::round(size.height() / scale)));
+	return 2;
+}
+
+namespace {
+
+using PlayerType = AudioMsgId::Type;
+
+// The music, or a voice message if no music plays.
+[[nodiscard]] PlayerType ActivePlayerType() {
+	const auto player = Media::Player::instance();
+	const auto song = player->getState(PlayerType::Song);
+	if (song.id.audio()
+		&& !Media::Player::IsStoppedOrStopping(song.state)) {
+		return PlayerType::Song;
+	}
+	const auto voice = player->getState(PlayerType::Voice);
+	if (voice.id.audio()
+		&& !Media::Player::IsStoppedOrStopping(voice.state)) {
+		return PlayerType::Voice;
+	}
+	return PlayerType::Song;
+}
+
+} // namespace
+
+// tg.player.state() -> { title, performer, playing, position, duration,
+// voice, peer, message, has_next, has_previous } or nil
+int Plugin::ApiPlayerState(lua_State *L) {
+	const auto plugin = From(L);
+	plugin->requirePermission(L, kPermPlayer);
+	const auto player = Media::Player::instance();
+	const auto type = ActivePlayerType();
+	const auto state = player->getState(type);
+	const auto document = state.id.audio();
+	if (!document || Media::Player::IsStoppedOrStopping(state.state)) {
+		lua_pushnil(L);
+		return 1;
+	}
+	const auto song = document->song();
+	const auto title = (song && !song->title.isEmpty())
+		? song->title
+		: document->filename();
+	const auto frequency = std::max(state.frequency, 1);
+	const auto position = double(state.position) / frequency;
+	const auto duration = (state.length > 0)
+		? (double(state.length) / frequency)
+		: (document->duration() / 1000.);
+	lua_createtable(L, 0, 10);
+	PushString(L, title);
+	lua_setfield(L, -2, "title");
+	PushString(L, song ? song->performer : QString());
+	lua_setfield(L, -2, "performer");
+	lua_pushboolean(L, Media::Player::ShowPauseIcon(state.state) ? 1 : 0);
+	lua_setfield(L, -2, "playing");
+	lua_pushnumber(L, position);
+	lua_setfield(L, -2, "position");
+	lua_pushnumber(L, duration);
+	lua_setfield(L, -2, "duration");
+	lua_pushboolean(L, (type == PlayerType::Voice) ? 1 : 0);
+	lua_setfield(L, -2, "voice");
+	lua_pushboolean(L, player->nextAvailable(type) ? 1 : 0);
+	lua_setfield(L, -2, "has_next");
+	lua_pushboolean(L, player->previousAvailable(type) ? 1 : 0);
+	lua_setfield(L, -2, "has_previous");
+	const auto context = state.id.contextId();
+	if (context.peer) {
+		lua_pushinteger(L, BotApiId(context.peer));
+		lua_setfield(L, -2, "peer");
+		lua_pushinteger(L, lua_Integer(context.msg.bare));
+		lua_setfield(L, -2, "message");
+	}
+	return 1;
+}
+
+namespace {
+
+// Player buttons run on the next event loop turn, never inside a hook.
+int PlayerAction(lua_State *L, Fn<void(not_null<Media::Player::Instance*>, PlayerType)> action) {
+	const auto type = ActivePlayerType();
+	crl::on_main([=] {
+		action(Media::Player::instance(), type);
+	});
+	return 0;
+}
+
+} // namespace
+
+int Plugin::ApiPlayerToggle(lua_State *L) {
+	From(L)->requirePermission(L, kPermPlayer);
+	return PlayerAction(L, [](auto player, auto type) {
+		player->playPause(type);
+	});
+}
+
+int Plugin::ApiPlayerPlay(lua_State *L) {
+	From(L)->requirePermission(L, kPermPlayer);
+	return PlayerAction(L, [](auto player, auto type) {
+		player->play(type);
+	});
+}
+
+int Plugin::ApiPlayerPause(lua_State *L) {
+	From(L)->requirePermission(L, kPermPlayer);
+	return PlayerAction(L, [](auto player, auto type) {
+		player->pause(type);
+	});
+}
+
+int Plugin::ApiPlayerNext(lua_State *L) {
+	From(L)->requirePermission(L, kPermPlayer);
+	return PlayerAction(L, [](auto player, auto type) {
+		player->next(type);
+	});
+}
+
+int Plugin::ApiPlayerPrevious(lua_State *L) {
+	From(L)->requirePermission(L, kPermPlayer);
+	return PlayerAction(L, [](auto player, auto type) {
+		player->previous(type);
+	});
+}
+
+int Plugin::ApiPlayerStop(lua_State *L) {
+	From(L)->requirePermission(L, kPermPlayer);
+	return PlayerAction(L, [](auto player, auto type) {
+		player->stop(type);
+	});
+}
+
+// tg.player.seek(fraction): 0 is the start, 1 the end.
+int Plugin::ApiPlayerSeek(lua_State *L) {
+	From(L)->requirePermission(L, kPermPlayer);
+	const auto progress = std::clamp(
+		double(luaL_checknumber(L, 1)),
+		0.,
+		1.);
+	return PlayerAction(L, [=](auto player, auto type) {
+		player->startSeeking(type);
+		player->finishSeeking(type, progress);
+	});
 }
 
 } // namespace Plugins::Flua

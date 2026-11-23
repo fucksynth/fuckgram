@@ -76,7 +76,8 @@ turns plugins on and off and opens the plugins folder.
 (without it the card shows the first letter of the name).
 
 `categories` is optional too: the plugin catalog sorts plugins by them.
-Known ones are `appearance`, `chats`, `media`, `privacy`, `tools` and `fun`;
+Known ones are `appearance`, `chats`, `media`, `privacy`, `tools`,
+`integrations`, `fun` and `libraries`;
 other names are skipped (`tools/flua_pack.py` warns about them).
 
 ### Plugin catalog
@@ -124,13 +125,15 @@ Settings → Plugins → Plugin engine:
 | `plugin.on("display", fn(shown))` | `display` | `shown.place`: `message`, `chat.list`, `chat.title`, `chat.status`, `copy`; return a string to show (or copy) instead |
 | `plugin.on("screen", fn(screen))` | `chats.read` | `screen.screen`: `chat.list`, `chat`, `profile`; `screen.peer` |
 | `plugin.on("profile.rows", fn(peer))` | `ui` | return `{ { label = ..., value = ... }, ... }` to add rows to a profile |
-| `plugin.menu(place, text, fn(ctx))` | `ui` | menu item; `place` is `message`, `main`, `chat` or `profile`; `ctx.peer`, `ctx.message` |
+| `plugin.menu(place, text, fn(ctx))`, `plugin.menu{...}` | `ui` | menu item or settings row, see [Pages, menus and drawing](#pages-menus-and-drawing); returns an id for `plugin.menu_remove(id)` |
+| `plugin.settings.page(builder)` | `ui` | the plugin's settings page (a gear on its card), see below |
 | `plugin.settings.get(key, default)`, `.set(key, value)` | `storage` | small values kept between runs |
 | `plugin.resource(path)` | — | bytes of `resources/<path>` from the package, `nil` if there is none; read-only |
 | `plugin.files.read(name)`, `.write(name, bytes)`, `.remove(name)`, `.list()` | `storage` | the plugin's own files in `plugins_data/<id>/files/` (names of `A-Z a-z 0-9 _ . -`, up to 16 MB each and 64 MB in all); copy a database from `resources/` here to change it |
-| `tg.toast(text)` | `ui` | short notice in the window |
-| `tg.messages.send(peer, text, options)` | `messages.send` | send a text message; `options`: `reply_to` (message id), `silent`, `schedule` (unixtime) |
-| `tg.messages.edit(peer, id, text)` | `messages.manage` | edit a message you may edit |
+| `tg.toast(text)`, `tg.toast{ text, title, duration }` | `ui` | short notice in the window |
+| `tg.messages.send(peer, text, options)` | `messages.send` | send a text message; `options`: `reply_to` (message id), `silent`, `schedule` (unixtime), `parse_mode` (`markdown` or `html`) |
+| `tg.messages.send_file(peer, { bytes, name, caption, photo, silent })` | `messages.send` | send bytes as a file or a photo, up to 16 MB |
+| `tg.messages.edit(peer, id, text, options)` | `messages.manage` | edit a message you may edit; `options.parse_mode` as for send |
 | `tg.messages.delete(peer, ids, revoke)` | `messages.manage` | delete up to 100 messages; `revoke` deletes for everyone where allowed; returns how many |
 | `tg.messages.get(peer, id)` | `messages.read` | a loaded message or `nil` |
 | `tg.peers.get(id)` | `chats.read` | `{ id, type, name, username, is_self, premium, verified }` of a known chat or user, `type` is `user`, `bot`, `group`, `supergroup` or `channel` |
@@ -142,6 +145,8 @@ Settings → Plugins → Plugin engine:
 | `tg.ui.confirm(text or { title, text, ok, cancel })` | `ui` | `true` / `false`; waits inside `tg.async` or takes a callback |
 | `tg.ui.input{ title, text, value, placeholder, ok, cancel }` | `ui` | the entered text or `nil`; waits inside `tg.async` or takes a callback |
 | `tg.ui.copy(text)` | `ui` | put text into the clipboard |
+| `tg.ui.dialog{...}`, `tg.ui.overlay{...}`, `tg.ui.image(bytes)`, `tg.ui.open(target)` | `ui` | see [Pages, menus and drawing](#pages-menus-and-drawing) |
+| `tg.ui.current()` | `chats.read` | the chat open in the active window and its title |
 | `tg.async(fn, ...)` | — | run `fn` as a coroutine; inside it `tg.http.request` waits for the reply without blocking the client |
 | `tg.http.request{ url, method, headers, body }` | `net:<host>` | HTTPS only, to declared hosts (`net:api.example.com`, `net:*.example.com`); returns `{ status, body, headers, error }`; no automatic redirects; pass a callback as the 2nd argument instead of using `tg.async` |
 | `tg.timer.after(ms, fn)`, `tg.timer.every(ms, fn)`, `tg.timer.cancel(id)` | — | one-shot and repeating timers (repeating ≥ 100 ms, up to 64) |
@@ -150,13 +155,199 @@ Settings → Plugins → Plugin engine:
 | `plugin.on("mtproto.request", fn(call), methods)` | `mtproto` | every request the client sends; return `false` to cancel it (the caller gets the error `CLIENT_PLUGIN_CANCELLED`), a table to send instead, `nil` to keep |
 | `plugin.on("mtproto.response", fn(result, method), methods)` | `mtproto` | every answer (also `rpc_error`) before the client sees it; return a value to replace it |
 | `plugin.on("mtproto.updates", fn(updates))` | `mtproto` | raw updates container; return `false` to drop it, a table to replace it |
-| `tg.log(...)`, `print(...)` | — | write to the client log |
+| `tg.log(...)`, `print(...)` | — | write to the client log and the plugin journal |
+| `tg.dump(value)` | — | readable text of a value, tables with their fields |
 | `require("source.module")` | — | load `source/module.lua` or `lib/module.lua` from the package |
 | global `on_enable()`, `on_disable()` | — | called after the entry file ran and before the plugin stops |
 
 `msg` is `{ id, peer, from, text, out, date }`. Chat ids are written as in the
 Bot API: users `> 0`, basic groups `< 0`, channels and supergroups
 `-100…`.
+
+### Pages, menus and drawing
+
+See `examples/plugins/showcase`: it uses everything below.
+
+#### Settings page and other pages
+
+`plugin.settings.page(builder)` gives the plugin a settings page: a gear
+appears on its card in Settings → Plugins. `builder` returns the rows; it
+runs every time the page opens and after `plugin.settings.refresh()`.
+
+```lua
+plugin.settings.page(function()
+    return {
+        { type = "header", text = "Display" },
+        { type = "switch", key = "compact", text = "Compact", subtext = "…",
+          icon = "eye", default = false, on_change = function(on) end },
+        { type = "selector", key = "mode", text = "Mode",
+          items = { "One", "Two" }, default = 1 },          -- 1-based
+        { type = "input", key = "name", text = "Name", placeholder = "…" },
+        { type = "slider", key = "size", text = "Size", min = 10, max = 24,
+          step = 1, default = 14 },
+        { type = "custom", height = 64, paint = function(c) end,
+          on_click = function() end },                       -- canvas row
+        { type = "divider", text = "A caption under a block" },
+        { type = "text", text = "More", subtext = "…", icon = "info",
+          page = function() return { title = "More", ... } end },  -- sub page
+        { type = "text", text = "Reset", red = true, on_click = function() end },
+    }
+end)
+```
+
+- Rows with a `key` (switch, selector, input, slider) keep their value in the
+  plugin settings: `plugin.settings.get(key)` reads it (needs `storage`),
+  `on_change(value)` gets the new one.
+- `text` rows take `on_click` or `page` (a nested page; nesting is allowed);
+  `accent` and `red` color the title. A page may set `title`.
+- `icon` is one of the [icon names](#icons).
+- `plugin.settings.refresh()` builds open pages of the plugin again;
+  `plugin.settings.all()` returns every setting, `plugin.settings.reset()`
+  clears them (both need `storage`).
+
+#### Menus and rows anywhere
+
+`plugin.menu{ place, text, icon, on_click, page }` returns an id for
+`plugin.menu_remove(id)`. `on_click(ctx)` runs on a click, `page` opens a
+page instead. The short form `plugin.menu(place, text, fn)` still works.
+
+| `place` | Where |
+|---|---|
+| `message` | message context menu; `ctx.peer`, `ctx.message` |
+| `chat` | the ⋮ menu of a chat (in the "Plugins" submenu); `ctx.peer` |
+| `profile` | the ⋮ menu of a profile; `ctx.peer` |
+| `main` | the main menu (the left drawer) |
+| `send` | the menu of the send button (right click); `ctx.peer` |
+| `settings.<section>` | a row at the end of a settings section |
+
+Settings sections: `main`, `account`, `notifications`, `privacy`, `chats`,
+`folders`, `advanced`, `calls`, `sessions`, `blocked`, `shortcuts`,
+`fuckgram`, `fuckgram.ghost`, `fuckgram.filters`, `fuckgram.general`,
+`fuckgram.appearance`, `fuckgram.chats`, `fuckgram.other`, `plugins`.
+
+#### Canvas and overlays
+
+`tg.ui.overlay{ x, y, width, height, corner, paint, on_click }` shows a
+widget over the window, `corner` is `top-left` (default), `top-right`,
+`bottom-left` or `bottom-right` and `x`, `y` count from it. Without
+`on_click` clicks go through it. It returns `{ id, update(), move{...},
+close() }`: call `o:update()` when what it shows changes.
+
+`paint(c)` gets a canvas — for overlays and `custom` rows — that works only
+inside that call. Sizes are pixels at 100 % interface scale, the client
+scales them.
+
+| Canvas | |
+|---|---|
+| `c:size()` | width, height |
+| `c:fill(color)` | the whole area |
+| `c:rect(x, y, w, h, color, radius)` | a filled (rounded) rectangle |
+| `c:stroke(x, y, w, h, color, width, radius)` | its outline |
+| `c:circle(x, y, r, color)`, `c:line(x1, y1, x2, y2, color, width)` | |
+| `c:text(x, y, text, { size, bold, italic, color, align, width, height })` | `width` wraps, returns the width and height taken |
+| `c:measure(text, options)` | width, height |
+| `c:image(id, x, y, w, h, radius)` | a picture from `tg.ui.image` |
+| `c:polygon({ x1, y1, x2, y2, ... }, color)` | a filled polygon: icons, arrows |
+| `c:opacity(value)` | for what is drawn next in this call |
+
+Colors are `"#rrggbb"`, `"#aarrggbb"`, `{ r, g, b, a }` or a theme color:
+`windowBg`, `windowBgOver`, `windowBgRipple`, `windowFg`, `windowSubTextFg`,
+`windowBoldFg`, `windowActiveTextFg`, `windowShadowFg`, `activeButtonBg`,
+`activeButtonFg`, `lightButtonFg`, `attentionButtonFg`, `boxBg`,
+`boxTextFgGood`, `menuBg`, `menuIconFg`, `shadowFg`, `placeholderFg`,
+`dialogsBg`, `sideBarBg`, `titleBg`, `historyComposeAreaBg`, `msgInBg`,
+`msgOutBg`, `historyTextInFg`, `historyTextOutFg`,
+`historyPeer1UserpicBg` … `historyPeer8UserpicBg`. `tg.ui.color(name)`
+gives its current value as `#aarrggbb`.
+
+`tg.ui.image(bytes)` decodes PNG, JPEG, WebP or GIF bytes (from
+`plugin.resource`, `plugin.files.read` or an HTTP reply) and returns
+`id, width, height`; `tg.ui.image_free(id)` drops it. Up to 64 images,
+larger than 2048 px are scaled down.
+
+#### Dialogs, notices, the window
+
+| Lua | Permission | |
+|---|---|---|
+| `tg.ui.dialog{ title, text, items, buttons, danger }` | `ui` | `items` is a list to choose from, `buttons` up to 3, `danger` makes one red; returns the number chosen, `nil` if closed. Waits inside `tg.async` or takes a callback |
+| `tg.toast{ text, title, duration }` | `ui` | `duration` in ms; `tg.toast(text)` still works |
+| `tg.ui.current()` | `chats.read` | `{ screen = "chat" or "chats", peer, title, window }` |
+| `tg.ui.open(target)` | `ui` | opens a chat id, `"@username"` or a link |
+| `tg.dump(value)` | — | readable text of a value, tables with their fields |
+| `tg.ui.window_size()` | `ui` | width and height of the window content, at 100 % scale |
+| `tg.now()` | — | milliseconds of a steady clock, for animations |
+
+#### The music player
+
+`player` lets a plugin see what the client's player plays and press its
+buttons (`examples/plugins/material_player` draws its own player with it).
+
+| Lua | |
+|---|---|
+| `tg.player.state()` | `{ title, performer, playing, position, duration, voice, has_next, has_previous, peer, message }` of the music, or of a voice message if no music plays; `nil` when nothing plays. `position` and `duration` are seconds |
+| `tg.player.toggle()`, `.play()`, `.pause()`, `.stop()` | |
+| `tg.player.next()`, `.previous()` | |
+| `tg.player.seek(fraction)` | `0` is the start, `1` the end |
+
+#### Formatting and files
+
+`tg.messages.send(peer, text, { parse_mode = "markdown" })` and
+`tg.messages.edit(peer, id, text, { parse_mode = "html" })` format the
+text. Markdown is the client's own: `**bold**`, `__italic__`, `~~strike~~`,
+`||spoiler||`, `` `code` ``, fenced blocks, links. HTML takes `<b>`, `<i>`,
+`<u>`, `<s>`, `<code>`, `<pre>`, `<a href>`, `<tg-spoiler>`,
+`<blockquote>` and `&amp;`-style entities.
+
+`tg.messages.send_file(peer, { bytes, name, caption, photo, silent })`
+sends bytes as a file (`photo = true` compresses a picture), up to 16 MB;
+needs `messages.send`.
+
+#### Icons
+
+`settings`, `palette`, `customize`, `font`, `chat`, `chats`, `reply`,
+`forward`, `edit`, `draw`, `copy`, `delete`, `pin`, `unpin`, `select`,
+`send`, `schedule`, `silent`, `mute`, `unmute`, `link`, `share`,
+`download`, `folder`, `file`, `photo`, `gif`, `sticker`, `emoji`,
+`reactions`, `search`, `translate`, `info`, `faq`, `user`, `users`,
+`add_user`, `admin`, `channel`, `bot`, `plugins`, `lock`, `key`, `shield`,
+`privacy`, `block`, `eye`, `eye_off`, `ghost`, `bell`, `sound`,
+`sound_off`, `phone`, `video`, `star`, `fave`, `like`, `premium`, `gift`,
+`shop`, `stats`, `timer`, `hourglass`, `archive`, `saved`, `night`,
+`network`, `storage`, `devices`, `experimental`, `power`, `restore`,
+`refresh`, `add`, `remove`, `cancel`, `expand`, `collapse`, `new_window`,
+`qr`, `location`, `ip`, `username`, `topics`, `poll`, `article`, `spoiler`,
+`tag`, `payment`, `code`.
+
+### exteraGram SDK and fuckgram
+
+What a plugin for exteraGram (Android) uses and where it is here:
+
+| exteraGram | fuckgram |
+|---|---|
+| `__id__`, `__name__`, `__version__`, `__author__`, `__description__`, `__icon__`, `__category__` | `manifest.json`: `id`, `name`, `version`, `author`, `description`, `icon`, `categories` |
+| `on_plugin_load` / `on_plugin_unload` / `on_app_event` | `on_enable()` / `on_disable()` / `plugin.on("app.state")` |
+| `get_setting` / `set_setting` / `export_settings` / `import_settings` | `plugin.settings.get` / `.set` / `.all` / `.reset` |
+| `create_settings()`: `Header`, `Divider`, `Switch`, `Selector`, `Input`, `Text`, `EditText`, `Custom`, `create_sub_fragment` | `plugin.settings.page()`: `header`, `divider`, `switch`, `selector`, `input`, `text`, `slider`, `custom` (canvas), `page` |
+| `add_menu_item(MenuItemData)`: message, drawer, chat action, profile action menus; `icon`; `remove_menu_item` | `plugin.menu{...}`: `message`, `main`, `chat`, `profile`, plus `send` and `settings.<section>`; `icon`; `plugin.menu_remove` |
+| `pre_request_hook` / `post_request_hook` / `on_updates_hook` | `plugin.on("mtproto.request" / "mtproto.response" / "mtproto.updates")` |
+| `on_send_message_hook` | `plugin.on("message.send")` |
+| `send_request(TLObject)` | `tg.invoke{ _ = "method", ... }` |
+| `send_text` / `send_message(parse_mode)` / `edit_message` | `tg.messages.send` / `.edit` with `parse_mode` |
+| `send_photo` / `send_document` / `send_video` / `send_audio` | `tg.messages.send_file` |
+| `BulletinHelper.show_*` | `tg.toast` |
+| `AlertDialogBuilder` (title, message, items, buttons, red button) | `tg.ui.dialog`, `tg.ui.confirm`, `tg.ui.input`, `tg.ui.alert` |
+| `copy_to_clipboard`, `run_on_ui_thread(delay)` | `tg.ui.copy`, `tg.timer.after` |
+| `parse_text` (HTML, Markdown) | `parse_mode` of send / edit |
+| `file_utils` (plugin folders, read / write) | `plugin.files.*`, `plugin.resource` (only the plugin's own folder) |
+| Intents (deep link handlers) | `plugin.on("url.open")` |
+| `FilesController` (open a file type) | `plugin.on("action")` with `file.open` |
+| `NotificationCenterDelegate` events | `plugin.on("message.new" / "screen" / "action" / ...)` |
+| Custom Android views, `SimpleSettingFactory` | the canvas: `custom` rows and `tg.ui.overlay` |
+| `get_media_controller()` (the player) | `tg.player` |
+| Plugin repositories (channels, Git index) | the plugin catalog (channels) |
+| Dev server | development folders that reload on save |
+| `logger` | `tg.log`, `print`, `tg.dump`, the plugin journal |
+| Xposed method hooks, reflection | not offered: plugins see the client only through the hooks and the API, which is what the code check is for |
 
 ### Raw MTProto
 

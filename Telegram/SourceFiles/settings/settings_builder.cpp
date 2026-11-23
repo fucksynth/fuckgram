@@ -6,6 +6,7 @@ For license and copyright information please follow this link:
 https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "settings/settings_builder.h"
+#include "plugins/plugins_hooks.h"
 
 #include "apiwrap.h"
 #include "lang/lang_keys.h"
@@ -66,17 +67,20 @@ BuildHelper::BuildHelper(
 	const auto isPaused = Window::PausedIn(
 		controller,
 		Window::GifPauseReason::Layer);
+	const auto inner = static_cast<Ui::VerticalLayout*>(
+		container->add(object_ptr<Ui::OverrideMargins>(
+			container,
+			object_ptr<Ui::VerticalLayout>(container)))->entity());
 	auto builder = SectionBuilder(WidgetContext{
-		.container = static_cast<Ui::VerticalLayout*>(
-			container->add(object_ptr<Ui::OverrideMargins>(
-				container,
-				object_ptr<Ui::VerticalLayout>(container)))->entity()),
+		.container = inner,
 		.controller = controller,
 		.showOther = std::move(showOther),
 		.isPaused = isPaused,
 		.highlights = highlights,
 	});
 	_method(builder);
+	// PLUGIN-HOOK: settings_section
+	Plugins::FillSettingsSection(_meta.id, inner, controller);
 	SetupCopyLinkMenus(controller, *highlights, lifetime);
 
 	std::move(showFinished) | rpl::on_next([=] {

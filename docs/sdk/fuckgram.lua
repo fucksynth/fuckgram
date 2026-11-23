@@ -79,6 +79,7 @@
 ---@field reply_to? integer message id in the same chat
 ---@field silent? boolean
 ---@field schedule? integer unixtime
+---@field parse_mode? "markdown"|"html"
 
 ---@class ConfirmOptions
 ---@field title? string
@@ -113,9 +114,12 @@ plugin = {}
 ---@overload fun(event: "mtproto.updates", handler: fun(updates: TlObject): (false|TlObject|nil))
 function plugin.on(event, handler, methods) end
 
----@param place "message"|"main"|"chat"|"profile"
----@param text string
----@param handler fun(context: Context)
+---A menu item or a settings row; returns an id for plugin.menu_remove.
+---@param place "message"|"main"|"chat"|"profile"|"send"|MenuItem
+---@param text? string
+---@param handler? fun(context: Context)
+---@return integer id
+---@overload fun(item: MenuItem): integer
 function plugin.menu(place, text, handler) end
 
 plugin.settings = {}
@@ -128,6 +132,62 @@ function plugin.settings.get(key, default) end
 ---@param key string
 ---@param value boolean|number|string|nil
 function plugin.settings.set(key, value) end
+
+---Every setting of the plugin.
+---@return table<string, boolean|number|string>
+function plugin.settings.all() end
+
+---Clears every setting of the plugin.
+function plugin.settings.reset() end
+
+---@alias PageRowType "header"|"divider"|"switch"|"selector"|"input"|"text"|"slider"|"custom"
+
+---@class PageRow
+---@field type? PageRowType "text" by default
+---@field key? string the setting a switch, selector, input or slider changes
+---@field text? string
+---@field subtext? string
+---@field icon? IconName
+---@field default? boolean|number|string the value while the setting is not set
+---@field items? string[] selector: the choices, the value is 1-based
+---@field placeholder? string input
+---@field min? number slider
+---@field max? number slider
+---@field step? number slider
+---@field height? integer custom: 1..1000 px
+---@field accent? boolean text: an accent color title
+---@field red? boolean text: a red title
+---@field on_change? fun(value: boolean|number|string)
+---@field on_click? fun()
+---@field page? fun(): PageRow[] text: opens a nested page
+---@field paint? fun(c: Canvas) custom
+
+---@class Page: PageRow[]
+---@field title? string
+
+---Gives the plugin a settings page: a gear on its card in Settings > Plugins.
+---`builder` runs every time the page opens and after refresh().
+---@param builder fun(): Page
+function plugin.settings.page(builder) end
+
+---Builds open pages of the plugin again.
+function plugin.settings.refresh() end
+
+---@alias IconName "settings"|"palette"|"customize"|"font"|"chat"|"chats"|"reply"|"forward"|"edit"|"draw"|"copy"|"delete"|"pin"|"unpin"|"select"|"send"|"schedule"|"silent"|"mute"|"unmute"|"link"|"share"|"download"|"folder"|"file"|"photo"|"gif"|"sticker"|"emoji"|"reactions"|"search"|"translate"|"info"|"faq"|"user"|"users"|"add_user"|"admin"|"channel"|"bot"|"plugins"|"lock"|"key"|"shield"|"privacy"|"block"|"eye"|"eye_off"|"ghost"|"bell"|"sound"|"sound_off"|"phone"|"video"|"star"|"fave"|"like"|"premium"|"gift"|"shop"|"stats"|"timer"|"hourglass"|"archive"|"saved"|"night"|"network"|"storage"|"devices"|"experimental"|"power"|"restore"|"refresh"|"add"|"remove"|"cancel"|"expand"|"collapse"|"new_window"|"qr"|"location"|"ip"|"username"|"topics"|"poll"|"article"|"spoiler"|"tag"|"payment"|"code"
+
+---@alias MenuPlace "message"|"main"|"chat"|"profile"|"send"|"settings.main"|"settings.account"|"settings.notifications"|"settings.privacy"|"settings.chats"|"settings.folders"|"settings.advanced"|"settings.calls"|"settings.sessions"|"settings.blocked"|"settings.shortcuts"|"settings.fuckgram"|"settings.fuckgram.ghost"|"settings.fuckgram.filters"|"settings.fuckgram.general"|"settings.fuckgram.appearance"|"settings.fuckgram.chats"|"settings.fuckgram.other"|"settings.plugins"
+
+---@class MenuItem
+---@field place MenuPlace
+---@field text string
+---@field icon? IconName
+---@field on_click? fun(ctx: Context)
+---@field page? fun(): Page opens a page instead
+
+---Removes a menu item or settings row by the id plugin.menu() gave.
+---@param id integer
+---@return boolean removed
+function plugin.menu_remove(id) end
 
 ---Bytes of resources/<path> from the package, nil if there is none.
 ---@param path string
@@ -159,8 +219,18 @@ tg = {}
 ---@param ... any
 function tg.log(...) end
 
----@param text string
+---@class ToastOptions
+---@field text string
+---@field title? string
+---@field duration? integer ms, 500..60000
+
+---@param text string|ToastOptions
 function tg.toast(text) end
+
+---Readable text of a value, tables with their fields.
+---@param value any
+---@return string
+function tg.dump(value) end
 
 ---Runs `fn` as a coroutine: inside it tg.http.request, tg.invoke and the
 ---tg.ui dialogs wait for their answer without blocking the client.
@@ -191,8 +261,21 @@ function tg.messages.send(peer, text, options) end
 ---@param peer PeerId
 ---@param id integer
 ---@param text string
+---@param options? { parse_mode: "markdown"|"html"|nil }
 ---@return boolean queued
-function tg.messages.edit(peer, id, text) end
+function tg.messages.edit(peer, id, text, options) end
+
+---@class SendFileOptions
+---@field bytes string the file, up to 16 MB
+---@field name string the file name
+---@field caption? string
+---@field photo? boolean send a picture as a compressed photo
+---@field silent? boolean
+
+---@param peer PeerId
+---@param file SendFileOptions
+---@return boolean queued
+function tg.messages.send_file(peer, file) end
 
 ---@param peer PeerId
 ---@param ids integer|integer[] up to 100
@@ -248,6 +331,140 @@ function tg.ui.input(options, callback) end
 
 ---@param text string
 function tg.ui.copy(text) end
+
+---@class DialogOptions
+---@field title? string
+---@field text? string
+---@field items? string[] a list to choose from
+---@field buttons? string[] up to 3
+---@field danger? integer the number of a button to make red
+
+---@param options DialogOptions
+---@param callback? fun(chosen: integer?)
+---@return integer? chosen the item or button, nil if closed (inside tg.async)
+function tg.ui.dialog(options, callback) end
+
+---@class Current
+---@field screen "chat"|"chats"|"none"
+---@field peer? PeerId
+---@field title? string the chat name
+---@field window? string the window title
+
+---@return Current
+function tg.ui.current() end
+
+---Opens a chat id, "@username" or a link.
+---@param target PeerId|string
+function tg.ui.open(target) end
+
+---@alias Color string|{ r: integer, g: integer, b: integer, a: integer? } "#rrggbb", "#aarrggbb" or a theme color name
+
+---The current value of a theme color as "#aarrggbb".
+---@param name string
+---@return string?
+function tg.ui.color(name) end
+
+---Decodes PNG, JPEG, WebP or GIF bytes for c:image().
+---@param bytes string
+---@return integer? id
+---@return integer width
+---@return integer height
+function tg.ui.image(bytes) end
+
+---@param id integer
+function tg.ui.image_free(id) end
+
+---@class TextOptions
+---@field size? number px, 13 by default
+---@field bold? boolean
+---@field italic? boolean
+---@field color? Color
+---@field align? "left"|"center"|"right"
+---@field width? number wraps the text
+---@field height? number cuts it
+
+---A canvas of one paint call. Sizes are px at 100 % interface scale.
+---@class Canvas
+local Canvas = {}
+---@return integer width
+---@return integer height
+function Canvas:size() end
+---@param color Color
+function Canvas:fill(color) end
+function Canvas:rect(x, y, w, h, color, radius) end
+function Canvas:stroke(x, y, w, h, color, width, radius) end
+function Canvas:circle(x, y, radius, color) end
+function Canvas:line(x1, y1, x2, y2, color, width) end
+---@param options? TextOptions
+---@return number width
+---@return number height
+function Canvas:text(x, y, text, options) end
+---@param options? TextOptions
+---@return number width
+---@return number height
+function Canvas:measure(text, options) end
+function Canvas:image(id, x, y, w, h, radius) end
+---@param value number 0..1
+function Canvas:opacity(value) end
+---@param points number[] x1, y1, x2, y2, ...
+---@param color Color
+function Canvas:polygon(points, color) end
+
+---@class OverlayOptions
+---@field x? integer
+---@field y? integer
+---@field width? integer
+---@field height? integer
+---@field corner? "top-left"|"top-right"|"bottom-left"|"bottom-right"
+---@field paint fun(c: Canvas)
+---@field on_click? fun(x: integer, y: integer) without it clicks go through
+
+---@class Overlay
+---@field id integer
+local Overlay = {}
+function Overlay:update() end
+---@param geometry { x: integer?, y: integer?, width: integer?, height: integer?, corner: string? }
+function Overlay:move(geometry) end
+function Overlay:close() end
+
+---Width and height of the window content at 100 % scale, nil without a window.
+---@return integer? width
+---@return integer? height
+function tg.ui.window_size() end
+
+---Milliseconds of a steady clock.
+---@return integer
+function tg.now() end
+
+---@class PlayerState
+---@field title string
+---@field performer string
+---@field playing boolean
+---@field position number seconds
+---@field duration number seconds
+---@field voice boolean a voice message, not music
+---@field has_next boolean
+---@field has_previous boolean
+---@field peer? PeerId
+---@field message? integer
+
+---The client's music player (permission "player").
+tg.player = {}
+---@return PlayerState?
+function tg.player.state() end
+function tg.player.toggle() end
+function tg.player.play() end
+function tg.player.pause() end
+function tg.player.stop() end
+function tg.player.next() end
+function tg.player.previous() end
+---@param fraction number 0..1
+function tg.player.seek(fraction) end
+
+---A widget over the window that the plugin paints.
+---@param options OverlayOptions
+---@return Overlay?
+function tg.ui.overlay(options) end
 
 tg.timer = {}
 

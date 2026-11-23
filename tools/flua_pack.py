@@ -16,11 +16,12 @@ import sys
 import zipfile
 
 KNOWN_PERMISSIONS = {
+    "player",
     "messages.read", "messages.send", "ui", "storage", "links",
     "actions", "display", "chats.read", "compose", "mtproto",
     "messages.manage",
 }
-KNOWN_CATEGORIES = {"appearance", "chats", "media", "privacy", "tools", "fun"}
+KNOWN_CATEGORIES = {"appearance", "chats", "media", "privacy", "tools", "integrations", "fun", "libraries"}
 NET_HOST = r"^(\*\.)?[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)+$"
 NATIVE = (".dll", ".so", ".dylib", ".exe", ".pyd")
 MAX_FILE = 4 * 1024 * 1024

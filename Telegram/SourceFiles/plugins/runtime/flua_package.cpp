@@ -192,6 +192,7 @@ const std::vector<QString> &KnownPermissions() {
 		QString::fromLatin1(kPermCompose),
 		QString::fromLatin1(kPermMtproto),
 		QString::fromLatin1(kPermMessagesManage),
+		QString::fromLatin1(kPermPlayer),
 	};
 	return result;
 }
@@ -203,7 +204,9 @@ const std::vector<QString> &KnownCategories() {
 		u"media"_q,
 		u"privacy"_q,
 		u"tools"_q,
+		u"integrations"_q,
 		u"fun"_q,
+		u"libraries"_q,
 	};
 	return result;
 }

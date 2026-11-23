@@ -10,6 +10,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "core/application.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
+#include "dialogs/dialogs_key.h"
 #include "history/history.h"
 #include "history/history_item.h"
 #include "lang/lang_instance.h"
@@ -18,7 +19,9 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/runtime/flua_package.h"
 #include "plugins/runtime/flua_plugin.h"
 #include "plugins/runtime/flua_tl.h"
+#include "plugins/runtime/flua_canvas.h"
 #include "plugins/ui/plugins_manager.h"
+#include "plugins/ui/plugins_pages.h"
 #include "settings.h"
 #include "ui/layers/generic_box.h"
 #include "ui/widgets/checkbox.h"
@@ -41,6 +44,42 @@ namespace Plugins::Flua {
 namespace {
 
 std::unique_ptr<Host> Instance;
+
+// A menu item of a plugin: its handler, or the page it opens.
+[[nodiscard]] MenuItem MakeMenuItem(
+		not_null<Plugin*> plugin,
+		const MenuEntry &entry,
+		PeerData *peer,
+		Fn<HistoryItem*()> item) {
+	const auto weak = base::make_weak(plugin.get());
+	const auto ref = entry.ref;
+	const auto page = entry.page;
+	const auto entryId = entry.id;
+	const auto generation = plugin->generation();
+	const auto id = plugin->manifest().id;
+	const auto title = entry.text;
+	return {
+		.text = entry.text,
+		.handler = [=] {
+			const auto strong = weak.get();
+			if (!strong
+				|| strong->generation() != generation
+				|| !ranges::contains(strong->menu(), entryId, &MenuEntry::id)) {
+				return;
+			} else if (ref != kNoRef) {
+				strong->menuClicked(ref, peer, item ? item() : nullptr);
+			} else if (page != kNoRef) {
+				const auto window = Core::App().activeWindow();
+				if (const auto controller = window
+						? window->sessionController()
+						: nullptr) {
+					OpenPluginPage(controller, id, page, generation, title);
+				}
+			}
+		},
+		.icon = entry.icon.isEmpty() ? nullptr : IconByName(entry.icon),
+	};
+}
 
 [[nodiscard]] MenuPlace PlaceFor(PeerMenuPlace place) {
 	return (place == PeerMenuPlace::Profile)
@@ -93,8 +132,12 @@ QString PermissionText(const QString &permission) {
 			"отправлять сообщения и менять то, что вы отправляете");
 	} else if (is(kPermUi)) {
 		return pick(
-			"add menu items, rows and notices",
-			"добавлять пункты меню, строки и уведомления");
+			"add menu items, settings pages and notices, draw over the window",
+			"добавлять пункты меню, страницы настроек и уведомления, рисовать поверх окна");
+	} else if (is(kPermPlayer)) {
+		return pick(
+			"see what the music player plays and press its buttons",
+			"видеть, что играет в плеере, и нажимать его кнопки");
 	} else if (is(kPermStorage)) {
 		return pick("keep its own settings", "хранить свои настройки");
 	} else if (is(kPermLinks)) {
@@ -178,6 +221,7 @@ void ApplyTranslations() {
 		.error = plugin.lastError(),
 		.dev = QFileInfo(plugin.origin()).isDir(),
 		.running = plugin.running(),
+		.settings = plugin.hasSettingsPage(),
 	};
 }
 
@@ -748,6 +792,10 @@ void Host::refreshHooks() {
 	SetEnabled(Hook::MessageMenu, menu(MenuPlace::Message, MenuPlace::Message));
 	SetEnabled(Hook::MainMenu, menu(MenuPlace::Main, MenuPlace::Main));
 	SetEnabled(Hook::PeerMenu, menu(MenuPlace::Chat, MenuPlace::Profile));
+	SetEnabled(Hook::SendMenu, menu(MenuPlace::Send, MenuPlace::Send));
+	SetEnabled(
+		Hook::SettingsSection,
+		menu(MenuPlace::Settings, MenuPlace::Settings));
 	const auto requests = has(Event::MtprotoRequest);
 	const auto responses = has(Event::MtprotoResponse);
 	// Responses are decoded by the method of their request: watch those.
@@ -977,19 +1025,9 @@ void Host::messageMenu(
 			if (entry.place != MenuPlace::Message) {
 				continue;
 			}
-			const auto weak = base::make_weak(plugin.get());
-			const auto ref = entry.ref;
-			items.push_back({
-				.text = entry.text,
-				.handler = [=] {
-					if (const auto strong = weak.get()) {
-						strong->menuClicked(
-							ref,
-							peer,
-							peer->owner().message(peer->id, msgId));
-					}
-				},
-			});
+			items.push_back(MakeMenuItem(plugin.get(), entry, peer, [=] {
+				return peer->owner().message(peer->id, msgId);
+			}));
 		}
 	}
 }
@@ -1007,17 +1045,8 @@ void Host::peerMenu(
 			if (entry.place != wanted) {
 				continue;
 			}
-			const auto weak = base::make_weak(plugin.get());
-			const auto ref = entry.ref;
-			const auto raw = peer.get();
-			items.push_back({
-				.text = entry.text,
-				.handler = [=] {
-					if (const auto strong = weak.get()) {
-						strong->menuClicked(ref, raw, nullptr);
-					}
-				},
-			});
+			items.push_back(
+				MakeMenuItem(plugin.get(), entry, peer.get(), nullptr));
 		}
 	}
 }
@@ -1031,18 +1060,65 @@ void Host::mainMenu(std::vector<MenuItem> &items) {
 			if (entry.place != MenuPlace::Main) {
 				continue;
 			}
-			const auto weak = base::make_weak(plugin.get());
-			const auto ref = entry.ref;
-			items.push_back({
-				.text = entry.text,
-				.handler = [=] {
-					if (const auto strong = weak.get()) {
-						strong->menuClicked(ref, nullptr, nullptr);
-					}
-				},
+			items.push_back(
+				MakeMenuItem(plugin.get(), entry, nullptr, nullptr));
+		}
+	}
+}
+
+void Host::sendMenu(PeerData *peer, std::vector<MenuItem> &items) {
+	if (!peer) {
+		if (const auto controller = ActiveController()) {
+			peer = controller->activeChatCurrent().peer();
+		}
+	}
+	for (const auto &plugin : _plugins) {
+		if (!plugin->running()) {
+			continue;
+		}
+		for (const auto &entry : plugin->menu()) {
+			if (entry.place == MenuPlace::Send) {
+				items.push_back(
+					MakeMenuItem(plugin.get(), entry, peer, nullptr));
+			}
+		}
+	}
+}
+
+void Host::settingsSection(
+		const QString &section,
+		not_null<Ui::VerticalLayout*> container,
+		not_null<Window::SessionController*> controller) {
+	auto rows = std::vector<SettingsRow>();
+	for (const auto &plugin : _plugins) {
+		if (!plugin->running()) {
+			continue;
+		}
+		for (const auto &entry : plugin->menu()) {
+			if (entry.place != MenuPlace::Settings
+				|| entry.section != section) {
+				continue;
+			}
+			auto item = MakeMenuItem(plugin.get(), entry, nullptr, nullptr);
+			rows.push_back({
+				.text = std::move(item.text),
+				.icon = item.icon,
+				.handler = std::move(item.handler),
 			});
 		}
 	}
+	if (!rows.empty()) {
+		AddSettingsRows(container, std::move(rows));
+	}
+}
+
+Plugin *Host::plugin(const QString &id) const {
+	for (const auto &plugin : _plugins) {
+		if (plugin->manifest().id == id) {
+			return plugin.get();
+		}
+	}
+	return nullptr;
 }
 
 void Host::setPluginEnabled(const QString &id, bool enabled) {

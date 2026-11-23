@@ -8,11 +8,14 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 
 #include "base/weak_ptr.h"
 #include "data/data_peer_id.h"
+#include "base/unique_qptr.h"
 #include "plugins/plugins_hooks.h"
+#include "plugins/runtime/flua_canvas.h"
 #include "plugins/runtime/flua_package.h"
 #include "plugins/runtime/flua_tl.h"
 
 #include <QtCore/QJsonObject>
+#include <QtCore/QJsonValue>
 #include <QtCore/QPointer>
 
 struct lua_State;
@@ -23,6 +26,11 @@ class QNetworkReply;
 
 class HistoryItem;
 class PeerData;
+class QPainter;
+
+namespace Ui {
+class RpWidget;
+} // namespace Ui
 
 namespace MTP {
 class Error;
@@ -52,17 +60,64 @@ enum class Event {
 	Count,
 };
 
+inline constexpr auto kNoRef = -2; // LUA_NOREF
+
 enum class MenuPlace {
 	Message,
 	Main,
 	Chat,
 	Profile,
+	Send,     // the menu of the send button
+	Settings, // a row in a settings section
 };
 
 struct MenuEntry {
+	int id = 0;
 	MenuPlace place = MenuPlace::Message;
+	QString section; // Settings: "main", "chats", "fuckgram"...
 	QString text;
-	int ref = 0; // Lua registry reference of the handler
+	QString icon; // a name for IconByName()
+	int ref = kNoRef; // on_click: Lua registry reference
+	int page = kNoRef; // page builder, opens a page on click
+};
+
+// A row of a plugin page, as its builder function returned it.
+struct PageItem {
+	enum class Type {
+		Header,
+		Divider,
+		Switch,
+		Selector,
+		Input,
+		Text,
+		Slider,
+		Custom,
+	};
+	Type type = Type::Text;
+	QString key; // the setting it changes
+	QString text;
+	QString subtext;
+	QString icon;
+	QString placeholder;
+	std::vector<QString> items; // Selector
+	QJsonValue fallback; // the value while the setting is not set
+	double min = 0.;
+	double max = 100.;
+	double step = 1.;
+	int height = 0; // Custom
+	bool accent = false;
+	bool red = false;
+	int onChange = kNoRef;
+	int onClick = kNoRef;
+	int page = kNoRef; // a sub page builder
+	int paint = kNoRef; // Custom
+};
+
+struct Page {
+	QString title;
+	std::vector<PageItem> items;
+	std::vector<int> refs; // the handlers, released with the page
+	int generation = 0;
 };
 
 struct SendVerdict {
@@ -92,6 +147,24 @@ public:
 
 	[[nodiscard]] bool handles(Event event) const;
 	[[nodiscard]] const std::vector<MenuEntry> &menu() const;
+	// Bumped on every start / stop.
+	[[nodiscard]] int generation() const;
+
+	// Pages. A page builder is a Lua function that returns the rows.
+	[[nodiscard]] bool hasSettingsPage() const;
+	// Calls a builder: the settings page of the plugin for kNoRef. The
+	// handlers the page keeps must be released with releasePage().
+	[[nodiscard]] std::optional<Page> buildPage(int ref, QString *error);
+	void releasePage(const Page &page);
+	// plugin.settings.refresh(): open pages of the plugin build again.
+	[[nodiscard]] rpl::producer<> pageRefreshes() const;
+	[[nodiscard]] QJsonValue setting(const QString &key) const;
+	void setSetting(const QString &key, const QJsonValue &value);
+	// on_change(value), or on_click() for an undefined value; handlers
+	// of a page built in another run are not called.
+	void pageCallback(int generation, int ref, const QJsonValue &value);
+	// Paints a custom row, `size` in unscaled pixels.
+	void paintCanvas(int generation, int ref, QPainter &p, QSize size);
 
 	void messageNew(not_null<HistoryItem*> item);
 	[[nodiscard]] SendVerdict messageSend(
@@ -160,6 +233,40 @@ private:
 	static int ApiFileWrite(lua_State *L);
 	static int ApiFileRemove(lua_State *L);
 	static int ApiFileList(lua_State *L);
+	static int ApiMenuRemove(lua_State *L);
+	static int ApiSettingsPage(lua_State *L);
+	static int ApiSettingsRefresh(lua_State *L);
+	static int ApiSettingsAll(lua_State *L);
+	static int ApiSettingsReset(lua_State *L);
+	static int ApiDialog(lua_State *L);
+	static int ApiCurrent(lua_State *L);
+	static int ApiOpen(lua_State *L);
+	static int ApiColor(lua_State *L);
+	static int ApiImage(lua_State *L);
+	static int ApiImageFree(lua_State *L);
+	static int ApiOverlay(lua_State *L);
+	static int OverlayUpdate(lua_State *L);
+	static int OverlayMove(lua_State *L);
+	static int OverlayClose(lua_State *L);
+	static int ApiSendFile(lua_State *L);
+	static int ApiDump(lua_State *L);
+	static int ApiWindowSize(lua_State *L);
+	static int ApiNow(lua_State *L);
+	static int ApiPlayerState(lua_State *L);
+	static int ApiPlayerToggle(lua_State *L);
+	static int ApiPlayerPlay(lua_State *L);
+	static int ApiPlayerPause(lua_State *L);
+	static int ApiPlayerNext(lua_State *L);
+	static int ApiPlayerPrevious(lua_State *L);
+	static int ApiPlayerStop(lua_State *L);
+	static int ApiPlayerSeek(lua_State *L);
+	// Reads the menu entry table at `index` (plugin.menu{...}).
+	[[nodiscard]] MenuEntry readMenuEntry(lua_State *L, int index);
+	// Reads the rows the builder returned, at `index`.
+	void readPage(lua_State *L, int index, Page &page);
+	void closeOverlay(int id);
+	void paintOverlay(int id, QPainter &p, QSize size);
+	void clickOverlay(int id, QPoint point);
 	// plugins_data/<id>/files/<name> for a checked name, raises otherwise.
 	[[nodiscard]] QString filePath(lua_State *L, int index) const;
 
@@ -253,7 +360,25 @@ private:
 
 	std::array<std::vector<int>, size_t(Event::Count)> _handlers;
 	std::vector<MenuEntry> _menu;
+	int _nextMenuId = 0;
 	QJsonObject _settings;
+	int _settingsPage = kNoRef;
+	// Builders of pages that may still be opened: kept until stop().
+	base::flat_set<int> _pageBuilders;
+	rpl::event_stream<> _pageRefreshes;
+
+	struct OverlayState {
+		base::unique_qptr<Ui::RpWidget> widget;
+		QRect geometry; // unscaled, relative to the corner
+		Qt::Corner corner = Qt::TopLeftCorner;
+		int paint = kNoRef;
+		int click = kNoRef;
+	};
+	std::map<int, OverlayState> _overlays;
+	int _nextOverlayId = 0;
+	std::map<int, QImage> _images;
+	int _nextImageId = 0;
+	ImageLookup _imageLookup;
 
 	// Bumped on every start / stop: async results of an older run are
 	// dropped instead of touching a closed or restarted state.

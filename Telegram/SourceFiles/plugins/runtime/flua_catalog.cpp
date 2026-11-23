@@ -705,6 +705,10 @@ QString CategoryName(const QString &category) {
 		return Translated("Tools", "Инструменты");
 	} else if (category == u"fun"_q) {
 		return Translated("Fun", "Развлечения");
+	} else if (category == u"integrations"_q) {
+		return Translated("Integrations", "Интеграции");
+	} else if (category == u"libraries"_q) {
+		return Translated("Libraries", "Библиотеки");
 	}
 	return category;
 }

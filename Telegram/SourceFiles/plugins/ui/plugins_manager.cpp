@@ -7,6 +7,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/ui/plugins_manager.h"
 
 #include "plugins/ui/plugins_catalog.h"
+#include "plugins/ui/plugins_pages.h"
 #include "plugins/ui/plugins_ui.h"
 
 #include "api/api_common.h"
@@ -16,6 +17,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "lang/lang_keys.h"
 #include "main/main_session.h"
 #include "plugins/runtime/flua_package.h"
+#include "plugins/runtime/flua_plugin.h"
 #include "plugins/runtime/flua_runtime.h"
 #include "settings/detailed_settings_button.h"
 #include "settings/settings_common.h"
@@ -181,6 +183,8 @@ constexpr auto kDocsUrl
 		return Translated("chats", "чаты");
 	} else if (is(kPermCompose)) {
 		return Translated("text field", "поле ввода");
+	} else if (is(kPermPlayer)) {
+		return Translated("music player", "плеер");
 	} else if (IsMtproto(permission)) {
 		return Translated("full account access", "полный доступ к аккаунту");
 	}
@@ -211,6 +215,8 @@ constexpr auto kDocsUrl
 		return st::menuIconPalette;
 	} else if (is(kPermChatsRead)) {
 		return st::menuIconChats;
+	} else if (is(kPermPlayer)) {
+		return st::menuIconSoundOn;
 	} else if (IsMtproto(permission)) {
 		return st::menuIconAdmin;
 	}
@@ -220,6 +226,7 @@ constexpr auto kDocsUrl
 
 struct CardCallbacks {
 	Fn<void(bool)> toggle;
+	Fn<void()> settings;
 	Fn<void()> share;
 	Fn<void()> journal;
 	Fn<void()> folder;
@@ -326,6 +333,13 @@ PluginCard::PluginCard(
 			st::pluginsCardTextStyle,
 			_view.description,
 			kPlainTextOptions);
+		if (_callbacks.settings) {
+			addAction(
+				st::pluginsActionSettings,
+				st::pluginsActionSettingsOver,
+				_callbacks.settings,
+				false);
+		}
 		if (_callbacks.share) {
 			addAction(
 				st::pluginsActionShare,
@@ -367,6 +381,7 @@ QString PluginCard::LookKey(const PluginView &view) {
 		view.description,
 		view.origin,
 		view.dev ? u"dev"_q : QString(),
+		view.settings ? u"settings"_q : QString(),
 		QString::number(view.icon.cacheKey()),
 	};
 	for (const auto &permission : view.permissions) {
@@ -980,6 +995,9 @@ void PluginsSection::setupContent() {
 	}
 	Ui::AddSkip(content);
 
+	// PLUGIN-HOOK-INTERNAL: rows plugins add to "plugins"
+	Plugins::FillSettingsSection(u"plugins"_q, content, controller());
+
 	Ui::ResizeFitChild(this, content);
 }
 
@@ -1090,6 +1108,11 @@ void PluginsSection::rebuild() {
 			.share = [=] { SharePlugin(controller, id); },
 			.journal = [=] { ShowJournal(controller, id, name); },
 		};
+		if (view.settings) {
+			callbacks.settings = [=] {
+				Flua::OpenPluginPage(controller, id, Flua::kNoRef, 0, name);
+			};
+		}
 		if (view.dev) {
 			callbacks.folder = [=] {
 				QDesktopServices::openUrl(QUrl::fromLocalFile(origin));

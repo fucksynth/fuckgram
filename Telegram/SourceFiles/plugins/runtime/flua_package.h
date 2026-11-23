@@ -25,6 +25,8 @@ inline constexpr auto kPermCompose = "compose";
 inline constexpr auto kPermMessagesManage = "messages.manage";
 // Raw MTProto: tg.invoke and the mtproto.* filters. Full account access.
 inline constexpr auto kPermMtproto = "mtproto";
+// The music player: what plays and its buttons (tg.player).
+inline constexpr auto kPermPlayer = "player";
 
 [[nodiscard]] const std::vector<QString> &KnownPermissions();
 
