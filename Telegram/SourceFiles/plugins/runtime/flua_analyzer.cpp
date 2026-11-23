@@ -115,6 +115,8 @@ const ApiEntry kApi[] = {
 	{ "plugin.files.list", ApiType::Function, kPermStorage },
 	{ "plugin.id", ApiType::Field, nullptr },
 	{ "plugin.name", ApiType::Field, nullptr },
+	{ "plugin.t", ApiType::Function, nullptr },
+	{ "tg.lang", ApiType::Function, nullptr },
 	{ "plugin.version", ApiType::Field, nullptr },
 	{ "require", ApiType::Function, nullptr },
 	{ "plugin.menu_remove", ApiType::Function, kPermUi },

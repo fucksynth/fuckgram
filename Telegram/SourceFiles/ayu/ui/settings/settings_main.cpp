@@ -17,6 +17,7 @@
 #include "ayu/ui/settings/settings_general.h"
 #include "ayu/ui/settings/settings_other.h"
 #include "core/version.h"
+#include "fuckgram/fuckgram_updater.h"
 #include "plugins/runtime/flua_runtime.h"
 #include "settings/settings_builder.h"
 #include "settings/settings_common.h"
@@ -133,6 +134,66 @@ void BuildCategories(SectionBuilder &builder) {
 	});
 }
 
+void BuildUpdates(SectionBuilder &builder) {
+	using namespace Fuckgram;
+
+	builder.addSkip();
+	builder.addDivider();
+	builder.addSkip();
+
+	builder.addSubsectionTitle(rpl::single(UpdateText(
+		"Updates",
+		"Обновления")));
+
+	builder.addButton({
+		.id = u"fuckgram/update"_q,
+		.title = UpdateStatusValue(
+		) | rpl::map([](const UpdateStatus &status) {
+			return (status.state == UpdateState::Ready)
+				? UpdateText("Restart and update", "Перезапустить и обновить")
+				: UpdateText("Check for updates", "Проверить обновления");
+		}),
+		.icon = { &st::menuIconDownload },
+		.label = UpdateStatusValue() | rpl::map(UpdateStatusText),
+		.onClick = [] {
+			if (CurrentUpdateStatus().state == UpdateState::Ready) {
+				InstallUpdate();
+			} else {
+				CheckForUpdates(true);
+			}
+		},
+		.keywords = { u"update"_q, u"обновление"_q, u"version"_q },
+	});
+	const auto automatic = builder.addButton({
+		.id = u"fuckgram/update_auto"_q,
+		.title = rpl::single(UpdateText(
+			"Check automatically",
+			"Проверять автоматически")),
+		.icon = { &st::menuIconSchedule },
+		.toggled = rpl::single(AutoUpdates()),
+		.shown = rpl::single(
+			CurrentUpdateStatus().state != UpdateState::Disabled),
+	});
+	if (automatic) {
+		automatic->toggledValue(
+		) | rpl::filter([](bool enabled) {
+			return (enabled != AutoUpdates());
+		}) | rpl::on_next([](bool enabled) {
+			SetAutoUpdates(enabled);
+		}, automatic->lifetime());
+	}
+	builder.addButton({
+		.id = u"fuckgram/releases"_q,
+		.title = rpl::single(UpdateText("All versions", "Все версии")),
+		.icon = { &st::menuIconInfo },
+		.label = rpl::single(QString("GitHub")),
+		.onClick = [] {
+			QDesktopServices::openUrl(QString(
+				"https://github.com/fucksynth/fuckgram/releases"));
+		},
+	});
+}
+
 void BuildLinks(SectionBuilder &builder) {
 	builder.addSkip();
 	builder.addDivider();
@@ -190,6 +251,7 @@ const auto kMeta = BuildHelper({
 	builder.addSkip();
 	BuildVersionInfo(builder);
 	BuildCategories(builder);
+	BuildUpdates(builder);
 	BuildLinks(builder);
 });
 

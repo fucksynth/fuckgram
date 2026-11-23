@@ -38,6 +38,9 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "styles/style_settings.h"
 #include "styles/style_widgets.h"
 
+#include <QtCore/QUrl>
+#include <QtGui/QDesktopServices>
+
 namespace Settings {
 namespace {
 
@@ -928,12 +931,21 @@ void PluginsCatalogSourceSection::setupContent() {
 		_catalog,
 		username,
 		true));
+	const auto opened = _catalog->source(username);
+	const auto repository = opened ? opened->repository : QString();
 	AddButtonWithIcon(
 		content,
-		rpl::single(Translated("Open the channel", "Открыть канал")),
+		rpl::single(repository.isEmpty()
+			? Translated("Open the channel", "Открыть канал")
+			: Translated("Open on GitHub", "Открыть на GitHub")),
 		st::settingsButton,
-		{ &st::menuIconChannel }
+		{ repository.isEmpty() ? &st::menuIconChannel : &st::menuIconIpAddress }
 	)->setClickedCallback([=] {
+		if (!repository.isEmpty()) {
+			QDesktopServices::openUrl(
+				QUrl(u"https://github.com/"_q + repository));
+			return;
+		}
 		controller->showPeerByLink(Window::PeerByLinkInfo{
 			.usernameOrId = username,
 		});

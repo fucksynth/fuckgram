@@ -1864,6 +1864,9 @@ PRIVATE
     plugins/ui/plugins_pages.cpp
     plugins/ui/plugins_pages.h
     plugins/ui/plugins_ui.h
+    fuckgram/fuckgram_build.h
+    fuckgram/fuckgram_updater.cpp
+    fuckgram/fuckgram_updater.h
     platform/linux/file_utilities_linux.cpp
     platform/linux/file_utilities_linux.h
     platform/linux/launcher_linux.cpp

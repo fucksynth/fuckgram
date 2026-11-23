@@ -7,6 +7,8 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/runtime/flua_catalog.h"
 
 #include "apiwrap.h"
+#include "base/unixtime.h"
+#include "logs.h"
 #include "data/data_document.h"
 #include "data/data_document_media.h"
 #include "data/data_file_origin.h"
@@ -22,7 +24,11 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QCryptographicHash>
 #include <QtCore/QRegularExpression>
+#include <QtNetwork/QNetworkAccessManager>
+#include <QtNetwork/QNetworkReply>
+#include <QtNetwork/QNetworkRequest>
 
 namespace Plugins::Flua {
 namespace {
@@ -39,6 +45,43 @@ constexpr auto kParallel = 4;
 		u"fuckgramplugins"_q,
 	};
 	return result;
+}
+
+// The official repository: index.json and the .flua files in "main".
+constexpr auto kRepository = "fucksynth/fuckgram-plugins";
+constexpr auto kRepositoryBranch = "main";
+constexpr auto kMaxIndexSize = int64(1024 * 1024);
+constexpr auto kMaxIndexFiles = 500;
+
+[[nodiscard]] QString RepositoryKey(const QString &repository) {
+	return u"github:"_q + repository;
+}
+
+[[nodiscard]] QString RepositoryFileUrl(
+		const QString &repository,
+		const QString &path) {
+	return u"https://raw.githubusercontent.com/%1/%2/%3"_q.arg(
+		repository,
+		QString::fromLatin1(kRepositoryBranch),
+		path);
+}
+
+[[nodiscard]] QNetworkRequest RepositoryRequest(const QString &url) {
+	auto request = QNetworkRequest(QUrl(url));
+	request.setAttribute(
+		QNetworkRequest::RedirectPolicyAttribute,
+		QNetworkRequest::NoLessSafeRedirectPolicy);
+	request.setRawHeader("User-Agent", "fuckgram-catalog");
+	return request;
+}
+
+// "dist/name.flua": no "..", no absolute paths, nothing but names.
+[[nodiscard]] bool GoodRepositoryPath(const QString &path) {
+	static const auto check = QRegularExpression(
+		u"^[A-Za-z0-9_.\\-]+(/[A-Za-z0-9_.\\-]+)*$"_q);
+	return check.match(path).hasMatch()
+		&& !path.split(u'/').contains(u".."_q)
+		&& path.endsWith(u".flua"_q, Qt::CaseInsensitive);
 }
 
 [[nodiscard]] QString CatalogPath() {
@@ -63,10 +106,11 @@ constexpr auto kParallel = 4;
 
 // What the package in a downloaded file is; nullopt if the file is not
 // there or not whole. Runs off the main thread: nothing here touches the
-// session or the interface.
+// session or the interface; the languages are taken on the main thread.
 [[nodiscard]] std::optional<CatalogPlugin> ReadCatalogFile(
 		const QString &path,
-		int64 size) {
+		int64 size,
+		const std::vector<QString> &languages) {
 	const auto info = QFileInfo(path);
 	if (!info.exists() || info.size() != size) {
 		return std::nullopt;
@@ -75,10 +119,10 @@ constexpr auto kParallel = 4;
 	const auto &manifest = package.manifest;
 	auto result = CatalogPlugin{
 		.id = manifest.id,
-		.name = manifest.name,
+		.name = manifest.displayName(languages),
 		.version = manifest.version,
 		.author = manifest.author,
-		.description = manifest.description,
+		.description = manifest.displayDescription(languages),
 		.permissions = manifest.permissions,
 		.categories = manifest.categories,
 		.error = package.error,
@@ -102,6 +146,14 @@ Catalog::Catalog(not_null<Main::Session*> session)
 	for (const auto &name : VerifiedChannels()) {
 		_sources.push_back({ .username = name, .verified = true });
 	}
+	const auto repository = QString::fromLatin1(kRepository);
+	_sources.push_back({
+		.username = RepositoryKey(repository),
+		.verified = true,
+		.title = repository.mid(repository.indexOf(u'/') + 1)
+			+ u" \u00B7 GitHub"_q,
+		.repository = repository,
+	});
 	loadCustom();
 
 	_session->data().documentLoadProgress(
@@ -207,7 +259,9 @@ void Catalog::load(const QString &username, bool force) {
 	_found.erase(source->username);
 	_parsed.erase(source->username);
 	notify();
-	if (source->peer) {
+	if (!source->repository.isEmpty()) {
+		requestIndex(source->username, source->generation);
+	} else if (source->peer) {
 		requestPage(source->username, source->generation, 0, 0);
 	} else {
 		resolve(source->username, source->generation);
@@ -383,6 +437,8 @@ void Catalog::requestPage(
 						.msgId = data.vid().v,
 						.date = data.vdate().v,
 						.generation = generation,
+						.fileName = file->filename(),
+						.size = file->size,
 					});
 				}, [](const auto &) {});
 			}, [&](const auto &data) {
@@ -420,11 +476,15 @@ void Catalog::startFiles(const QString &username) {
 	}
 	QDir().mkpath(CatalogPath());
 	for (auto &file : files) {
+		// A repository file is named by its contents: a cached one is
+		// the same file.
 		file.path = CatalogPath()
-			+ QString::number(file.document->id)
+			+ (file.document
+				? QString::number(file.document->id)
+				: (u"github-"_q + QString::fromLatin1(file.sha256)))
 			+ u".flua"_q;
 		const auto info = QFileInfo(file.path);
-		if (info.exists() && info.size() == file.document->size) {
+		if (info.exists() && info.size() == file.size) {
 			parse(file);
 		} else {
 			_queue.push_back(file);
@@ -438,9 +498,12 @@ void Catalog::downloadNext() {
 		auto file = _queue.front();
 		_queue.pop_front();
 		const auto source = find(file.username);
-		if (!source
-			|| !source->peer
-			|| source->generation != file.generation) {
+		if (!source || source->generation != file.generation) {
+			continue;
+		} else if (!file.url.isEmpty()) {
+			downloadUrl(file);
+			continue;
+		} else if (!source->peer || !file.document) {
 			continue;
 		}
 		// The same document in two posts or channels: one download.
@@ -470,7 +533,7 @@ void Catalog::downloadNext() {
 void Catalog::downloaded(not_null<DocumentData*> document) {
 	auto finished = std::vector<File>();
 	for (auto i = begin(_downloading); i != end(_downloading);) {
-		if (i->document == document) {
+		if (i->document == document.get()) {
 			finished.push_back(*i);
 			i = _downloading.erase(i);
 		} else {
@@ -553,9 +616,10 @@ void Catalog::parseNext() {
 		_parsing = true;
 		const auto weak = base::make_weak(this);
 		const auto path = file.path;
-		const auto size = int64(file.document->size);
+		const auto size = file.size;
+		const auto languages = LanguageChain(InterfaceLanguage());
 		crl::async([=] {
-			auto result = ReadCatalogFile(path, size);
+			auto result = ReadCatalogFile(path, size, languages);
 			crl::on_main(weak, [=, result = std::move(result)]() mutable {
 				_parsing = false;
 				parsed(file, std::move(result));
@@ -577,7 +641,7 @@ void Catalog::parsed(const File &file, std::optional<CatalogPlugin> plugin) {
 				"could not download the file",
 				"не удалось скачать файл"),
 		};
-	result.fileName = file.document->filename();
+	result.fileName = file.fileName;
 	result.path = file.path;
 	result.msgId = file.msgId;
 	result.date = file.date;
@@ -635,6 +699,138 @@ void Catalog::finish(const QString &username) {
 	source->plugins = std::move(result);
 	source->state = CatalogState::Ready;
 	notify();
+}
+
+not_null<QNetworkAccessManager*> Catalog::network() {
+	if (!_network) {
+		_network = std::make_unique<QNetworkAccessManager>();
+	}
+	return _network.get();
+}
+
+void Catalog::requestIndex(const QString &username, int generation) {
+	const auto source = find(username);
+	if (!source) {
+		return;
+	}
+	// The raw files are cached for minutes: a new query each minute.
+	const auto url = RepositoryFileUrl(source->repository, u"index.json"_q)
+		+ u"?t="_q
+		+ QString::number(base::unixtime::now() / 60);
+	const auto reply = network()->get(RepositoryRequest(url));
+	const auto weak = base::make_weak(this);
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		reply->deleteLater();
+		if (!weak || !current(username, generation)) {
+			return;
+		} else if (reply->error() != QNetworkReply::NoError) {
+			fail(username, Translated(
+				"could not read the repository: ",
+				"не удалось прочитать репозиторий: ") + reply->errorString());
+			return;
+		}
+		gotIndex(username, generation, reply->read(kMaxIndexSize));
+	});
+}
+
+// index.json: { "plugins": [ { "file": "dist/x.flua", "size": 123,
+// "sha256": "...", "date": 1700000000 }, ... ] }, the newest first.
+void Catalog::gotIndex(
+		const QString &username,
+		int generation,
+		const QByteArray &bytes) {
+	const auto source = find(username);
+	if (!source) {
+		return;
+	}
+	const auto document = QJsonDocument::fromJson(bytes);
+	if (!document.isObject()) {
+		fail(username, Translated(
+			"the repository has no plugin list",
+			"в репозитории нет списка плагинов"));
+		return;
+	}
+	const auto list = document.object().value(u"plugins"_q).toArray();
+	auto &found = _found[username];
+	found.clear();
+	for (const auto value : list) {
+		const auto entry = value.toObject();
+		const auto path = entry.value(u"file"_q).toString();
+		const auto sha256 = entry.value(
+			u"sha256"_q).toString().toLower().toLatin1();
+		const auto size = int64(entry.value(u"size"_q).toDouble());
+		if (!GoodRepositoryPath(path)
+			|| sha256.size() != 64
+			|| size <= 0
+			|| size > kMaxFileSize) {
+			continue;
+		}
+		found.push_back({
+			.username = username,
+			.msgId = MsgId(int64(list.size()) - int64(found.size())),
+			.date = TimeId(entry.value(u"date"_q).toDouble()),
+			.generation = generation,
+			.url = (RepositoryFileUrl(source->repository, path)
+				+ u"?sha="_q
+				+ QString::fromLatin1(sha256)),
+			.fileName = path.mid(path.lastIndexOf(u'/') + 1),
+			.sha256 = sha256,
+			.size = size,
+		});
+		if (int(found.size()) >= kMaxIndexFiles) {
+			break;
+		}
+	}
+	startFiles(username);
+}
+
+void Catalog::downloadUrl(const File &file) {
+	_downloading.push_back(file);
+	const auto reply = network()->get(RepositoryRequest(file.url));
+	const auto weak = base::make_weak(this);
+	QObject::connect(reply, &QNetworkReply::finished, [=] {
+		reply->deleteLater();
+		if (!weak) {
+			return;
+		}
+		const auto good = (reply->error() == QNetworkReply::NoError);
+		urlDownloaded(
+			file,
+			good ? reply->read(kMaxFileSize + 1) : QByteArray());
+	});
+}
+
+void Catalog::urlDownloaded(const File &file, const QByteArray &bytes) {
+	for (auto i = begin(_downloading); i != end(_downloading); ++i) {
+		if (i->url == file.url
+			&& i->username == file.username
+			&& i->generation == file.generation) {
+			_downloading.erase(i);
+			break;
+		}
+	}
+	const auto hash = QCryptographicHash::hash(
+		bytes,
+		QCryptographicHash::Sha256).toHex().toLower();
+	if (bytes.size() == file.size && hash == file.sha256) {
+		// Whole or nothing: a half-written file is never read.
+		const auto part = file.path + u".part"_q;
+		auto output = QFile(part);
+		if (output.open(QIODevice::WriteOnly | QIODevice::Truncate)
+			&& output.write(bytes) == bytes.size()) {
+			output.close();
+			QFile::remove(file.path);
+			QFile::rename(part, file.path);
+		} else {
+			output.close();
+			QFile::remove(part);
+		}
+	} else if (!bytes.isEmpty()) {
+		LOG(("Plugins Error: %1 does not match its size or SHA-256"
+			).arg(file.url));
+	}
+	parse(file);
+	downloadNext();
 }
 
 not_null<Catalog*> CatalogFor(not_null<Main::Session*> session) {

@@ -39,6 +39,22 @@ inline constexpr auto kPermPlayer = "player";
 [[nodiscard]] bool IsNetPermission(const QString &permission);
 [[nodiscard]] std::optional<QString> NetHostPattern(const QString &permission);
 
+// Name and description of a plugin in one language.
+struct LocalizedText {
+	QString name;
+	QString description;
+};
+
+// The interface language, lowercase: "ru", "en", "pt-br".
+[[nodiscard]] QString InterfaceLanguage();
+
+// Languages to look a text up in, best first, always ending with "en":
+// "pt-br" -> { "pt-br", "pt", "en" }.
+[[nodiscard]] std::vector<QString> LanguageChain(const QString &language);
+
+// Plural form of `count` in `language`: "one", "few", "many" or "other".
+[[nodiscard]] QString PluralForm(const QString &language, double count);
+
 struct Manifest {
 	QString id;
 	QString name;
@@ -51,6 +67,18 @@ struct Manifest {
 	int apiMax = 0;
 	std::vector<QString> permissions;
 	std::vector<QString> categories; // known ones, see KnownCategories()
+	// "localized": { "ru": { "name": ..., "description": ... } }; name and
+	// description above are the default (English) texts.
+	std::map<QString, LocalizedText> localized;
+
+	// Name and description in the interface language (main thread), or
+	// in the first of `languages` the manifest has (any thread).
+	[[nodiscard]] QString displayName() const;
+	[[nodiscard]] QString displayDescription() const;
+	[[nodiscard]] QString displayName(
+		const std::vector<QString> &languages) const;
+	[[nodiscard]] QString displayDescription(
+		const std::vector<QString> &languages) const;
 
 	[[nodiscard]] bool has(const char *permission) const;
 	[[nodiscard]] bool hasNetwork() const;

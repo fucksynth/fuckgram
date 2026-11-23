@@ -252,6 +252,8 @@ private:
 	static int ApiDump(lua_State *L);
 	static int ApiWindowSize(lua_State *L);
 	static int ApiNow(lua_State *L);
+	static int ApiLang(lua_State *L);
+	static int ApiTranslate(lua_State *L);
 	static int ApiPlayerState(lua_State *L);
 	static int ApiPlayerToggle(lua_State *L);
 	static int ApiPlayerPlay(lua_State *L);
@@ -349,6 +351,14 @@ private:
 
 	const not_null<Host*> _host;
 	Package _package;
+	struct Strings {
+		QString language;
+		QJsonObject object;
+	};
+	[[nodiscard]] const std::vector<Strings> &strings();
+	std::vector<Strings> _strings;
+	QString _stringsLanguage;
+	bool _stringsReady = false;
 	const QString _dataPath;
 
 	lua_State *_lua = nullptr;

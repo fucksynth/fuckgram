@@ -211,10 +211,10 @@ void ApplyTranslations() {
 	const auto &manifest = plugin.manifest();
 	return {
 		.id = manifest.id,
-		.name = manifest.name,
+		.name = manifest.displayName(),
 		.version = manifest.version,
 		.author = manifest.author,
-		.description = manifest.description,
+		.description = manifest.displayDescription(),
 		.permissions = manifest.permissions,
 		.origin = plugin.origin(),
 		.icon = plugin.icon(),
@@ -715,7 +715,7 @@ void Host::reload(const QString &origin) {
 	auto display = false;
 	for (const auto &plugin : _plugins) {
 		if (plugin->origin() == origin) {
-			name = plugin->manifest().name;
+			name = plugin->manifest().displayName();
 			display = plugin->handles(Event::Display);
 		}
 	}
@@ -1129,7 +1129,7 @@ void Host::setPluginEnabled(const QString &id, bool enabled) {
 		if (enabled) {
 			_disabled.remove(id);
 			if (mayRun() && !plugin->start()) {
-				Toast(plugin->manifest().name
+				Toast(plugin->manifest().displayName()
 					+ u": "_q
 					+ plugin->lastError());
 			}
@@ -1175,10 +1175,10 @@ void Host::offerInstall(const QString &path, InstallSource source) {
 	}
 	auto view = PluginView{
 		.id = manifest.id,
-		.name = manifest.name,
+		.name = manifest.displayName(),
 		.version = manifest.version,
 		.author = manifest.author,
-		.description = manifest.description,
+		.description = manifest.displayDescription(),
 		.permissions = manifest.permissions,
 		.origin = path,
 		.icon = ReadIcon(package.files, manifest.icon),

@@ -10,6 +10,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 
 class PeerData;
 class DocumentData;
+class QNetworkAccessManager;
 
 namespace Data {
 class DocumentMedia;
@@ -21,10 +22,11 @@ class Session;
 
 namespace Plugins::Flua {
 
-// The plugin catalog: .flua files posted in Telegram channels. Verified
-// channels are built in, the user adds own ones. Every file is downloaded
-// into plugins_data/catalog and checked like any package (manifest and
-// the static analysis) before it is shown.
+// The plugin catalog: .flua files posted in Telegram channels, and the
+// official GitHub repository (index.json with the files, their sizes and
+// SHA-256). Verified sources are built in, the user adds own channels.
+// Every file is downloaded into plugins_data/catalog and checked like any
+// package (manifest and the static analysis) before it is shown.
 
 struct CatalogPlugin {
 	QString id;
@@ -63,6 +65,8 @@ struct CatalogSource {
 	std::vector<CatalogPlugin> plugins;
 	// Grows with every load: answers of an older load are dropped.
 	int generation = 0;
+	// "owner/name" for a GitHub repository; `username` is its key then.
+	QString repository;
 
 	[[nodiscard]] int validCount() const;
 };
@@ -89,12 +93,16 @@ public:
 private:
 	struct File {
 		QString username;
-		not_null<DocumentData*> document;
+		DocumentData *document = nullptr; // a post in a channel
 		MsgId msgId = 0;
 		TimeId date = 0;
 		QString path;
 		int generation = 0;
 		int attempts = 0;
+		QString url; // a file of a GitHub repository
+		QString fileName;
+		QByteArray sha256; // hex, of a repository file
+		int64 size = 0;
 	};
 
 	[[nodiscard]] CatalogSource *find(const QString &username);
@@ -109,6 +117,14 @@ private:
 		MsgId offsetId,
 		int page);
 	void fail(const QString &username, const QString &error);
+	[[nodiscard]] not_null<QNetworkAccessManager*> network();
+	void requestIndex(const QString &username, int generation);
+	void gotIndex(
+		const QString &username,
+		int generation,
+		const QByteArray &bytes);
+	void downloadUrl(const File &file);
+	void urlDownloaded(const File &file, const QByteArray &bytes);
 	void startFiles(const QString &username);
 	void downloadNext();
 	void downloaded(not_null<DocumentData*> document);
@@ -134,6 +150,7 @@ private:
 	int _generations = 0;
 	rpl::event_stream<> _changes;
 	bool _changeQueued = false;
+	std::unique_ptr<QNetworkAccessManager> _network;
 	rpl::lifetime _lifetime;
 
 };

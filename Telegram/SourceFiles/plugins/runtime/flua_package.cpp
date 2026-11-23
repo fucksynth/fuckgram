@@ -9,6 +9,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/runtime/flua_analyzer.h"
 
 #include "base/zlib_help.h"
+#include "lang/lang_instance.h"
 #include "logs.h"
 
 #include <QtCore/QDir>
@@ -54,6 +55,24 @@ constexpr auto kMaxFiles = 512;
 		}
 	}
 	return false;
+}
+
+template <typename Field>
+[[nodiscard]] QString Localized(
+		const Manifest &manifest,
+		const std::vector<QString> &languages,
+		Field field,
+		const QString &fallback) {
+	for (const auto &language : languages) {
+		const auto i = manifest.localized.find(language);
+		if (i != end(manifest.localized)) {
+			const auto &text = i->second.*field;
+			if (!text.isEmpty()) {
+				return text;
+			}
+		}
+	}
+	return fallback;
 }
 
 void ParseManifest(Package &package) {
@@ -107,6 +126,20 @@ void ParseManifest(Package &package) {
 			.arg(manifest.apiMax)
 			.arg(kApiVersion);
 		return;
+	}
+
+	const auto localized = json.value(u"localized"_q).toObject();
+	for (auto i = localized.begin(); i != localized.end(); ++i) {
+		const auto language = i.key().trimmed().toLower();
+		if (language.isEmpty() || language.size() > 16) {
+			continue;
+		}
+		const auto texts = i.value().toObject();
+		manifest.localized[language] = LocalizedText{
+			.name = texts.value(u"name"_q).toString().trimmed(),
+			.description = texts.value(
+				u"description"_q).toString().trimmed(),
+		};
 	}
 
 	auto categories = json.value(u"categories"_q).toArray();
@@ -255,6 +288,105 @@ bool Manifest::hasNetwork() const {
 		}
 	}
 	return false;
+}
+
+QString InterfaceLanguage() {
+	auto result = Lang::GetInstance().id().trimmed().toLower();
+	if (result.isEmpty() || result.startsWith(u'#')) {
+		// A custom language file: its base, if any.
+		result = Lang::GetInstance().baseId().trimmed().toLower();
+	}
+	return result.isEmpty() ? u"en"_q : result;
+}
+
+std::vector<QString> LanguageChain(const QString &language) {
+	auto result = std::vector<QString>();
+	const auto add = [&](QString value) {
+		value = value.trimmed().toLower();
+		if (!value.isEmpty()
+			&& !value.startsWith(u'#')
+			&& std::find(begin(result), end(result), value) == end(result)) {
+			result.push_back(value);
+		}
+	};
+	add(language);
+	if (const auto dash = language.indexOf(u'-'); dash > 0) {
+		add(language.mid(0, dash));
+	}
+	// "ru-raw" and similar packs of the client.
+	const auto base = Lang::GetInstance().baseId();
+	if (!base.isEmpty() && language == InterfaceLanguage()) {
+		add(base);
+		if (const auto dash = base.indexOf(u'-'); dash > 0) {
+			add(base.mid(0, dash));
+		}
+	}
+	add(u"en"_q);
+	return result;
+}
+
+QString PluralForm(const QString &language, double count) {
+	const auto dash = language.indexOf(u'-');
+	const auto base = (dash > 0) ? language.mid(0, dash) : language;
+	const auto integer = (count == std::floor(count))
+		&& std::abs(count) < 1e15;
+	const auto n = integer ? std::abs(int64(count)) : int64(0);
+	const auto slavic = [&] {
+		if (!integer) {
+			return u"other"_q;
+		} else if (n % 10 == 1 && n % 100 != 11) {
+			return u"one"_q;
+		} else if (n % 10 >= 2 && n % 10 <= 4
+			&& !(n % 100 >= 12 && n % 100 <= 14)) {
+			return u"few"_q;
+		}
+		return u"many"_q;
+	};
+	if (base == u"ru"_q || base == u"uk"_q || base == u"be"_q) {
+		return slavic();
+	} else if (base == u"pl"_q) {
+		if (!integer) {
+			return u"other"_q;
+		} else if (n == 1) {
+			return u"one"_q;
+		} else if (n % 10 >= 2 && n % 10 <= 4
+			&& !(n % 100 >= 12 && n % 100 <= 14)) {
+			return u"few"_q;
+		}
+		return u"many"_q;
+	} else if (base == u"cs"_q || base == u"sk"_q) {
+		if (!integer) {
+			return u"other"_q;
+		} else if (n == 1) {
+			return u"one"_q;
+		} else if (n >= 2 && n <= 4) {
+			return u"few"_q;
+		}
+		return u"other"_q;
+	}
+	return (count == 1.) ? u"one"_q : u"other"_q;
+}
+
+QString Manifest::displayName() const {
+	return displayName(LanguageChain(InterfaceLanguage()));
+}
+
+QString Manifest::displayDescription() const {
+	return displayDescription(LanguageChain(InterfaceLanguage()));
+}
+
+QString Manifest::displayName(
+		const std::vector<QString> &languages) const {
+	return Localized(*this, languages, &LocalizedText::name, name);
+}
+
+QString Manifest::displayDescription(
+		const std::vector<QString> &languages) const {
+	return Localized(
+		*this,
+		languages,
+		&LocalizedText::description,
+		description);
 }
 
 bool Manifest::has(const char *permission) const {

@@ -112,6 +112,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ayu/ayu_infra.h"
 #include "ayu/ayu_settings.h"
 #include "ayu/features/streamer_mode/streamer_mode.h"
+#include "fuckgram/fuckgram_updater.h"
 #include "plugins/plugins_hooks.h"
 #include "plugins/runtime/flua_runtime.h"
 
@@ -492,6 +493,7 @@ void Application::run() {
 	// PLUGIN-HOOK: app_state
 	Plugins::Flua::Start();
 	Plugins::NotifyAppState(Plugins::AppState::Started);
+	Fuckgram::StartUpdater();
 	appDeactivatedValue(
 	) | rpl::on_next([](bool deactivated) {
 		Plugins::NotifyAppState(deactivated

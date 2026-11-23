@@ -800,11 +800,12 @@ void Plugin::registerApi() {
 	lua_newtable(_lua);
 	PushString(_lua, manifest().id);
 	lua_setfield(_lua, -2, "id");
-	PushString(_lua, manifest().name);
+	PushString(_lua, manifest().displayName());
 	lua_setfield(_lua, -2, "name");
 	PushString(_lua, manifest().version);
 	lua_setfield(_lua, -2, "version");
 	set("on", &Plugin::ApiOn);
+	set("t", &Plugin::ApiTranslate);
 	set("menu", &Plugin::ApiMenu);
 	set("menu_remove", &Plugin::ApiMenuRemove);
 	lua_newtable(_lua);
@@ -830,6 +831,7 @@ void Plugin::registerApi() {
 	set("log", &Plugin::ApiPrint);
 	set("dump", &Plugin::ApiDump);
 	set("now", &Plugin::ApiNow);
+	set("lang", &Plugin::ApiLang);
 	set("toast", &Plugin::ApiToast);
 	lua_newtable(_lua);
 	set("send", &Plugin::ApiSendMessage);
@@ -2326,7 +2328,7 @@ int Plugin::ApiInvoke(lua_State *L) {
 			0); // after no request
 	};
 	const auto name = QString::fromLatin1(Tl::Name(method));
-	const auto pluginName = plugin->manifest().name;
+	const auto pluginName = plugin->manifest().displayName();
 	// Sent on the next event loop turn, not from inside a running hook.
 	crl::on_main(session, [=] {
 		const auto strong = host.get();
@@ -3730,6 +3732,132 @@ int Plugin::ApiDump(lua_State *L) {
 // tg.now() -> milliseconds of a steady clock, for animations.
 int Plugin::ApiNow(lua_State *L) {
 	lua_pushinteger(L, lua_Integer(crl::now()));
+	return 1;
+}
+
+// tg.lang() -> "ru", "en", "pt-br": the interface language.
+int Plugin::ApiLang(lua_State *L) {
+	PushString(L, InterfaceLanguage());
+	return 1;
+}
+
+// locales/<language>.json of the package for the interface language and
+// its fallbacks, best first. Built again when the language changes.
+const std::vector<Plugin::Strings> &Plugin::strings() {
+	const auto language = InterfaceLanguage();
+	if (_stringsLanguage == language && _stringsReady) {
+		return _strings;
+	}
+	_stringsLanguage = language;
+	_stringsReady = true;
+	_strings.clear();
+	for (const auto &code : LanguageChain(language)) {
+		const auto i = _package.files.find(u"locales/"_q + code + u".json"_q);
+		if (i == end(_package.files)) {
+			continue;
+		}
+		const auto document = QJsonDocument::fromJson(i->second);
+		if (document.isObject()) {
+			_strings.push_back({ code, document.object() });
+		} else {
+			LOG(("Plugins Error: %1: locales/%2.json is not a JSON object"
+				).arg(manifest().id, code));
+		}
+	}
+	return _strings;
+}
+
+// plugin.t(key, ...) -> the text of `key` in the interface language.
+// plugin.t("k", a, b): {1} and {2} are replaced; plugin.t("k", { n = 1 }):
+// {n} is replaced. A plural value { one, few, many, other } takes the
+// form for the first argument (a number) or the "count" field.
+int Plugin::ApiTranslate(lua_State *L) {
+	const auto plugin = From(L);
+	const auto key = CheckString(L, 1);
+	const auto named = lua_istable(L, 2);
+	const auto arguments = lua_gettop(L) - 1;
+
+	auto count = std::optional<double>();
+	if (named) {
+		lua_getfield(L, 2, "count");
+		if (lua_type(L, -1) == LUA_TNUMBER) {
+			count = lua_tonumber(L, -1);
+		}
+		lua_pop(L, 1);
+	} else if (arguments > 0 && lua_type(L, 2) == LUA_TNUMBER) {
+		count = lua_tonumber(L, 2);
+	}
+
+	auto text = key;
+	for (const auto &[language, object] : plugin->strings()) {
+		const auto value = object.value(key);
+		if (value.isString()) {
+			text = value.toString();
+			break;
+		} else if (!value.isObject()) {
+			continue;
+		}
+		const auto forms = value.toObject();
+		auto order = std::vector<QString>();
+		if (count) {
+			order.push_back(PluralForm(language, *count));
+		}
+		for (const auto form : { "other", "many", "one", "few" }) {
+			order.push_back(QString::fromLatin1(form));
+		}
+		auto found = false;
+		for (const auto &form : order) {
+			const auto chosen = forms.value(form);
+			if (chosen.isString()) {
+				text = chosen.toString();
+				found = true;
+				break;
+			}
+		}
+		if (found) {
+			break;
+		}
+	}
+
+	if (arguments > 0 && text.contains(u'{')) {
+		static const auto placeholder = QRegularExpression(
+			u"\\{([A-Za-z0-9_]{1,32})\\}"_q);
+		auto result = QString();
+		auto from = 0;
+		auto matches = placeholder.globalMatch(text);
+		while (matches.hasNext()) {
+			const auto match = matches.next();
+			const auto name = match.captured(1);
+			auto replacement = std::optional<QString>();
+			if (named) {
+				lua_getfield(L, 2, name.toUtf8().constData());
+				if (!lua_isnil(L, -1)) {
+					auto length = size_t();
+					const auto data = luaL_tolstring(L, -1, &length);
+					replacement = QString::fromUtf8(data, int(length));
+					lua_pop(L, 1);
+				}
+				lua_pop(L, 1);
+			} else {
+				auto ok = false;
+				const auto index = name.toInt(&ok);
+				if (ok && index >= 1 && index <= arguments) {
+					auto length = size_t();
+					const auto data = luaL_tolstring(L, index + 1, &length);
+					replacement = QString::fromUtf8(data, int(length));
+					lua_pop(L, 1);
+				}
+			}
+			if (replacement) {
+				result += text.mid(from, match.capturedStart() - from);
+				result += *replacement;
+				from = match.capturedEnd();
+			}
+		}
+		result += text.mid(from);
+		text = result;
+	}
+	PushString(L, text);
 	return 1;
 }
 

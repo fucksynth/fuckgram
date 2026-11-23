@@ -110,6 +110,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 // AyuGram includes
 #include "ayu/ayu_settings.h"
+#include "fuckgram/fuckgram_updater.h"
 #include "ayu/utils/telegram_helpers.h"
 #include "base/platform/base_platform_haptic.h"
 
@@ -722,6 +723,37 @@ Widget::Widget(
 			checker.ready()
 		) | rpl::on_next([=] {
 			checkUpdateStatus();
+		}, lifetime());
+	} else {
+		// fuckgram updates itself: the same button under the chat list.
+		Fuckgram::UpdateStatusValue(
+		) | rpl::map([](const Fuckgram::UpdateStatus &status) {
+			return (status.state == Fuckgram::UpdateState::Ready);
+		}) | rpl::distinct_until_changed(
+		) | rpl::on_next([=](bool ready) {
+			if (_layout == Layout::Child || ready == bool(_updateTelegram)) {
+				return;
+			} else if (ready) {
+				_updateTelegram.create(
+					this,
+					Fuckgram::UpdateText(
+						"Update fuckgram",
+						"Обновить fuckgram"),
+					st::dialogsUpdateButton,
+					st::dialogsInstallUpdate,
+					st::dialogsInstallUpdateOver,
+					true);
+				_updateTelegram->show();
+				_updateTelegram->setClickedCallback([] {
+					Fuckgram::InstallUpdate();
+				});
+				if (_connecting) {
+					_connecting->raise();
+				}
+			} else {
+				_updateTelegram.destroy();
+			}
+			updateControlsGeometry();
 		}, lifetime());
 	}
 
