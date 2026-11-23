@@ -5,7 +5,9 @@ name: Windows
 # Only x64, one generator; libraries are cached and partial progress
 # is saved even when the job times out, so the first long build resumes.
 # Runs on push (code changes only) and manually (Actions → Windows → Run
-# workflow; needs this file on the default branch).
+# workflow; needs this file on the default branch). Pushes build Debug,
+# except to the "release" branch: `git push origin dev:release` builds
+# Release in its own queue, so it does not cancel the Debug builds.
 
 on:
   push:
@@ -46,9 +48,14 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 360
 
+    # A push to "release" builds Release, other branches build Debug.
+    # Release needs the release variants of the libraries too, so they are
+    # cached apart ("libs-full"): the Debug cache stays as it is.
     env:
       PREPARE_PATH: "Telegram/build/prepare/prepare.py"
-      BUILD_TYPE: ${{ inputs.build_type || 'Debug' }}
+      BUILD_TYPE: ${{ inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug' }}
+      LIBS: ${{ (inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug') == 'Release' && 'libs-full' || 'libs' }}
+      LIBS_ARGS: ${{ (inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug') == 'Release' && 'silent' || 'skip-release silent' }}
 
     defaults:
       run:
@@ -119,10 +126,13 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.LibrariesPath }}
-          key: ${{ runner.os }}-x64-libs-${{ env.CACHE_KEY }}
+          key: ${{ runner.os }}-x64-${{ env.LIBS }}-${{ env.CACHE_KEY }}
+          # For Release the Debug-only cache is a start: stages without
+          # release variants are not built again.
           restore-keys: |
-            ${{ runner.os }}-x64-libs-${{ env.CACHE_KEY }}-partial-
-            ${{ runner.os }}-x64-libs-
+            ${{ runner.os }}-x64-${{ env.LIBS }}-${{ env.CACHE_KEY }}-partial-
+            ${{ runner.os }}-x64-libs-${{ env.CACHE_KEY }}
+            ${{ runner.os }}-x64-${{ env.LIBS }}-
 
       # Takes 5+ minutes and is needed only to build the libraries: with
       # them from the cache 30 GB free is enough for the client.
@@ -145,7 +155,7 @@ jobs:
         id: libraries
         timeout-minutes: 330
         run: |
-          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent
+          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat %LIBS_ARGS%
 
       # If the first build did not finish (timeout/cancel), keep what was
       # built so the next run continues instead of starting over.
@@ -154,7 +164,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.LibrariesPath }}
-          key: ${{ runner.os }}-x64-libs-${{ env.CACHE_KEY }}-partial-${{ github.run_id }}
+          key: ${{ runner.os }}-x64-${{ env.LIBS }}-${{ env.CACHE_KEY }}-partial-${{ github.run_id }}
 
       - name: Read configuration.
         shell: bash
@@ -180,7 +190,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.LibrariesPath }}
-          key: ${{ runner.os }}-x64-libs-${{ env.CACHE_KEY }}
+          key: ${{ runner.os }}-x64-${{ env.LIBS }}-${{ env.CACHE_KEY }}
 
       # Objects of an earlier build: only what changed since compiles again.
       - name: Restore build cache.
