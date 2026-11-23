@@ -20,6 +20,7 @@ KNOWN_PERMISSIONS = {
     "actions", "display", "chats.read", "compose", "mtproto",
     "messages.manage",
 }
+KNOWN_CATEGORIES = {"appearance", "chats", "media", "privacy", "tools", "fun"}
 NET_HOST = r"^(\*\.)?[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)+$"
 NATIVE = (".dll", ".so", ".dylib", ".exe", ".pyd")
 MAX_FILE = 4 * 1024 * 1024
@@ -79,6 +80,13 @@ def check_manifest(root, files):
     low, high = api.get("min", 1), api.get("max", api.get("min", 1))
     if low > API_VERSION or high < API_VERSION:
         fail("needs plugin API %d-%d, the client has %d" % (low, high, API_VERSION))
+    categories = manifest.get("categories", [])
+    if isinstance(manifest.get("category"), str):
+        categories = categories + [manifest["category"]]
+    for category in categories:
+        if str(category).strip().lower() not in KNOWN_CATEGORIES:
+            print("warning: unknown category, the catalog skips it: " + str(category),
+                  file=sys.stderr)
     for permission in manifest.get("permissions", []):
         if permission.startswith("net:"):
             if not re.match(NET_HOST, permission[4:]):

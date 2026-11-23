@@ -26,10 +26,11 @@ namespace Plugins::Flua {
 struct PluginView;
 
 // What a plugin from a file is and can do; `install` gets whether to turn
-// it on right away.
+// it on right away. `trusted`: from a verified catalog channel.
 void ShowInstallBox(
 	not_null<Window::SessionController*> controller,
 	PluginView view,
+	bool trusted,
 	Fn<void(bool enable)> install);
 
 } // namespace Plugins::Flua

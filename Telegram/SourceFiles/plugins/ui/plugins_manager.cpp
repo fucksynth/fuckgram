@@ -6,6 +6,9 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 */
 #include "plugins/ui/plugins_manager.h"
 
+#include "plugins/ui/plugins_catalog.h"
+#include "plugins/ui/plugins_ui.h"
+
 #include "api/api_common.h"
 #include "apiwrap.h"
 #include "base/call_delayed.h"
@@ -45,16 +48,107 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtGui/QGuiApplication>
 
 namespace Plugins::Flua {
+
+QImage PrepareIcon(
+		const PluginView &view,
+		int size,
+		int radius) {
+	const auto ratio = style::DevicePixelRatio();
+	auto result = QImage(
+		QSize(size, size) * ratio,
+		QImage::Format_ARGB32_Premultiplied);
+	result.setDevicePixelRatio(ratio);
+	result.fill(Qt::transparent);
+
+	auto p = QPainter(&result);
+	PainterHighQualityEnabler hq(p);
+	auto path = QPainterPath();
+	path.addRoundedRect(QRectF(0, 0, size, size), radius, radius);
+	p.setClipPath(path);
+	const auto rect = QRect(0, 0, size, size);
+	if (!view.icon.isNull()) {
+		const auto scaled = view.icon.scaled(
+			QSize(size, size) * ratio,
+			Qt::KeepAspectRatioByExpanding,
+			Qt::SmoothTransformation);
+		const auto x = (scaled.width() - size * ratio) / 2;
+		const auto y = (scaled.height() - size * ratio) / 2;
+		p.drawImage(
+			rect,
+			scaled,
+			QRect(x, y, size * ratio, size * ratio));
+	} else {
+		const style::color *colors[] = {
+			&st::historyPeer1UserpicBg,
+			&st::historyPeer2UserpicBg,
+			&st::historyPeer3UserpicBg,
+			&st::historyPeer4UserpicBg,
+			&st::historyPeer5UserpicBg,
+			&st::historyPeer6UserpicBg,
+			&st::historyPeer7UserpicBg,
+			&st::historyPeer8UserpicBg,
+		};
+		const auto index = qHash(view.id) % uint(std::size(colors));
+		p.fillRect(rect, (*colors[index])->c);
+		auto font = st::semiboldFont->f;
+		font.setPixelSize(std::max(size * 45 / 100, 1));
+		p.setFont(font);
+		p.setPen(QColor(255, 255, 255));
+		const auto letter = view.name.trimmed().isEmpty()
+			? u"?"_q
+			: view.name.trimmed().left(1).toUpper();
+		p.drawText(rect, Qt::AlignCenter, letter);
+	}
+	p.end();
+	return result;
+}
+
+int LayoutBadges(
+		const std::vector<Badge> &badges,
+		int width,
+		QPainter *p,
+		QPoint origin) {
+	if (badges.empty()) {
+		return 0;
+	}
+	const auto &font = st::pluginsCardBadgeFont;
+	const auto height = st::pluginsCardBadgeHeight;
+	const auto skip = st::pluginsCardBadgeSkip;
+	const auto padding = st::pluginsCardBadgePadding;
+	const auto radius = st::pluginsCardBadgeRadius;
+	auto x = 0;
+	auto y = 0;
+	for (const auto &badge : badges) {
+		const auto full = font->width(badge.text) + 2 * padding;
+		const auto w = std::min(full, width);
+		if (x > 0 && x + w > width) {
+			x = 0;
+			y += height + skip;
+		}
+		if (p) {
+			const auto rect = QRect(origin.x() + x, origin.y() + y, w, height);
+			auto background = badge.color;
+			background.setAlphaF(0.14);
+			p->setPen(Qt::NoPen);
+			p->setBrush(background);
+			p->drawRoundedRect(rect, radius, radius);
+			p->setPen(badge.color);
+			p->setFont(font);
+			p->drawText(
+				rect,
+				Qt::AlignCenter,
+				font->elided(badge.text, std::max(w - 2 * padding, 1)));
+		}
+		x += w + skip;
+	}
+	return y + height;
+}
+
 namespace {
 
 constexpr auto kMaxErrorLines = 3;
 constexpr auto kDocsUrl
 	= "https://github.com/fucksynth/fuckgram/blob/dev/docs/plugins.md";
-
-struct Badge {
-	QString text;
-	QColor color;
-};
 
 [[nodiscard]] bool IsMtproto(const QString &permission) {
 	return (permission == QString::fromLatin1(kPermMtproto));
@@ -123,102 +217,6 @@ struct Badge {
 	return st::menuIconPermissions;
 }
 
-// The picture of the plugin or its first letter on a color.
-[[nodiscard]] QImage PrepareIcon(
-		const PluginView &view,
-		int size,
-		int radius) {
-	const auto ratio = style::DevicePixelRatio();
-	auto result = QImage(
-		QSize(size, size) * ratio,
-		QImage::Format_ARGB32_Premultiplied);
-	result.setDevicePixelRatio(ratio);
-	result.fill(Qt::transparent);
-
-	auto p = QPainter(&result);
-	PainterHighQualityEnabler hq(p);
-	auto path = QPainterPath();
-	path.addRoundedRect(QRectF(0, 0, size, size), radius, radius);
-	p.setClipPath(path);
-	const auto rect = QRect(0, 0, size, size);
-	if (!view.icon.isNull()) {
-		const auto scaled = view.icon.scaled(
-			QSize(size, size) * ratio,
-			Qt::KeepAspectRatioByExpanding,
-			Qt::SmoothTransformation);
-		const auto x = (scaled.width() - size * ratio) / 2;
-		const auto y = (scaled.height() - size * ratio) / 2;
-		p.drawImage(
-			rect,
-			scaled,
-			QRect(x, y, size * ratio, size * ratio));
-	} else {
-		const style::color *colors[] = {
-			&st::historyPeer1UserpicBg,
-			&st::historyPeer2UserpicBg,
-			&st::historyPeer3UserpicBg,
-			&st::historyPeer4UserpicBg,
-			&st::historyPeer5UserpicBg,
-			&st::historyPeer6UserpicBg,
-			&st::historyPeer7UserpicBg,
-			&st::historyPeer8UserpicBg,
-		};
-		const auto index = qHash(view.id) % uint(std::size(colors));
-		p.fillRect(rect, (*colors[index])->c);
-		auto font = st::semiboldFont->f;
-		font.setPixelSize(std::max(size * 45 / 100, 1));
-		p.setFont(font);
-		p.setPen(QColor(255, 255, 255));
-		const auto letter = view.name.trimmed().isEmpty()
-			? u"?"_q
-			: view.name.trimmed().left(1).toUpper();
-		p.drawText(rect, Qt::AlignCenter, letter);
-	}
-	p.end();
-	return result;
-}
-
-// Lays out badges in lines of `width`, paints them if `p` is given.
-int LayoutBadges(
-		const std::vector<Badge> &badges,
-		int width,
-		QPainter *p = nullptr,
-		QPoint origin = QPoint()) {
-	if (badges.empty()) {
-		return 0;
-	}
-	const auto &font = st::pluginsCardBadgeFont;
-	const auto height = st::pluginsCardBadgeHeight;
-	const auto skip = st::pluginsCardBadgeSkip;
-	const auto padding = st::pluginsCardBadgePadding;
-	const auto radius = st::pluginsCardBadgeRadius;
-	auto x = 0;
-	auto y = 0;
-	for (const auto &badge : badges) {
-		const auto full = font->width(badge.text) + 2 * padding;
-		const auto w = std::min(full, width);
-		if (x > 0 && x + w > width) {
-			x = 0;
-			y += height + skip;
-		}
-		if (p) {
-			const auto rect = QRect(origin.x() + x, origin.y() + y, w, height);
-			auto background = badge.color;
-			background.setAlphaF(0.14);
-			p->setPen(Qt::NoPen);
-			p->setBrush(background);
-			p->drawRoundedRect(rect, radius, radius);
-			p->setPen(badge.color);
-			p->setFont(font);
-			p->drawText(
-				rect,
-				Qt::AlignCenter,
-				font->elided(badge.text, std::max(w - 2 * padding, 1)));
-		}
-		x += w + skip;
-	}
-	return y + height;
-}
 
 struct CardCallbacks {
 	Fn<void(bool)> toggle;
@@ -677,6 +675,7 @@ void PluginCard::mousePressEvent(QMouseEvent *e) {
 void ShowInstallBox(
 		not_null<Window::SessionController*> controller,
 		PluginView view,
+		bool trusted,
 		Fn<void(bool enable)> install) {
 	const auto shared = std::make_shared<PluginView>(std::move(view));
 	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
@@ -725,10 +724,15 @@ void ShowInstallBox(
 				Translated("code checked", "код проверен"),
 				st::boxTextFgGood->c,
 			},
-			{
-				Translated("unknown source", "неизвестный источник"),
-				st::historyPeer8UserpicBg->c,
-			},
+			(trusted
+				? Badge{
+					Translated("verified source", "проверенный источник"),
+					st::boxTextFgGood->c,
+				}
+				: Badge{
+					Translated("unknown source", "неизвестный источник"),
+					st::historyPeer8UserpicBg->c,
+				}),
 		}));
 		if (!view.description.isEmpty()) {
 			box->addSkip(st::pluginsCardBlockSkip);
@@ -926,6 +930,14 @@ void PluginsSection::setupContent() {
 			}
 		}, master->lifetime());
 	}
+	AddButtonWithIcon(
+		content,
+		rpl::single(Translated("Plugin catalog", "Каталог плагинов")),
+		st::settingsButton,
+		{ &st::menuIconShop }
+	)->setClickedCallback([=] {
+		showOther(PluginsCatalogId());
+	});
 	AddButtonWithIcon(
 		content,
 		rpl::single(Translated("Plugin engine", "Движок плагинов")),

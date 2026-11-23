@@ -1845,6 +1845,8 @@ PRIVATE
     plugins/plugins_hooks.h
     plugins/runtime/flua_analyzer.cpp
     plugins/runtime/flua_analyzer.h
+    plugins/runtime/flua_catalog.cpp
+    plugins/runtime/flua_catalog.h
     plugins/runtime/flua_package.cpp
     plugins/runtime/flua_package.h
     plugins/runtime/flua_plugin.cpp
@@ -1853,8 +1855,11 @@ PRIVATE
     plugins/runtime/flua_runtime.h
     plugins/runtime/flua_tl.cpp
     plugins/runtime/flua_tl.h
+    plugins/ui/plugins_catalog.cpp
+    plugins/ui/plugins_catalog.h
     plugins/ui/plugins_manager.cpp
     plugins/ui/plugins_manager.h
+    plugins/ui/plugins_ui.h
     platform/linux/file_utilities_linux.cpp
     platform/linux/file_utilities_linux.h
     platform/linux/launcher_linux.cpp

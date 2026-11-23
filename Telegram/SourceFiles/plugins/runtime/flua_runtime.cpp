@@ -822,7 +822,7 @@ void Host::screen(Plugins::Screen screen, PeerData *peer) {
 bool Host::clientEvent(const ClientEventArgs &args) {
 	if (args.event == ClientEvent::OpenFile
 		&& args.path.endsWith(u".flua"_q, Qt::CaseInsensitive)) {
-		offerInstall(args.path);
+		offerInstall(args.path, InstallSource::File);
 		return true;
 	}
 	for (const auto &plugin : _plugins) {
@@ -1069,7 +1069,7 @@ void Host::setPluginEnabled(const QString &id, bool enabled) {
 	}
 }
 
-void Host::offerInstall(const QString &path) {
+void Host::offerInstall(const QString &path, InstallSource source) {
 	const auto controller = ActiveController();
 	if (!controller) {
 		return;
@@ -1088,12 +1088,13 @@ void Host::offerInstall(const QString &path) {
 			return;
 		}
 	}
-	if (!_engine.unknownSources) {
+	const auto trusted = (source == InstallSource::VerifiedChannel);
+	if (!trusted && !_engine.unknownSources) {
 		controller->showToast(Translated(
-			"Installing plugins from files is off: Settings > Plugins > "
-			"Plugin engine > Unknown sources.",
-			"Установка плагинов из файлов выключена: Настройки > Плагины > "
-			"Движок плагинов > Неизвестные источники."));
+			"Installing plugins from files and own channels is off: "
+			"Settings > Plugins > Plugin engine > Unknown sources.",
+			"Установка плагинов из файлов и своих каналов выключена: "
+			"Настройки > Плагины > Движок плагинов > Неизвестные источники."));
 		return;
 	}
 	auto view = PluginView{
@@ -1107,7 +1108,7 @@ void Host::offerInstall(const QString &path) {
 		.icon = ReadIcon(package.files, manifest.icon),
 	};
 	const auto weak = base::make_weak(this);
-	ShowInstallBox(controller, std::move(view), [=](bool enable) {
+	ShowInstallBox(controller, std::move(view), trusted, [=](bool enable) {
 		if (const auto strong = weak.get()) {
 			strong->install(path, manifest.id, enable);
 		}

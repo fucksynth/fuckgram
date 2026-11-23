@@ -109,6 +109,22 @@ void ParseManifest(Package &package) {
 		return;
 	}
 
+	auto categories = json.value(u"categories"_q).toArray();
+	if (const auto single = json.value(u"category"_q); single.isString()) {
+		categories.push_back(single);
+	}
+	for (const auto value : categories) {
+		const auto category = value.toString().trimmed().toLower();
+		const auto &known = KnownCategories();
+		if (std::find(begin(known), end(known), category) != end(known)
+			&& std::find(
+				begin(manifest.categories),
+				end(manifest.categories),
+				category) == end(manifest.categories)) {
+			manifest.categories.push_back(category);
+		}
+	}
+
 	for (const auto value : json.value(u"permissions"_q).toArray()) {
 		const auto permission = value.toString();
 		const auto &known = KnownPermissions();
@@ -176,6 +192,18 @@ const std::vector<QString> &KnownPermissions() {
 		QString::fromLatin1(kPermCompose),
 		QString::fromLatin1(kPermMtproto),
 		QString::fromLatin1(kPermMessagesManage),
+	};
+	return result;
+}
+
+const std::vector<QString> &KnownCategories() {
+	static const auto result = std::vector<QString>{
+		u"appearance"_q,
+		u"chats"_q,
+		u"media"_q,
+		u"privacy"_q,
+		u"tools"_q,
+		u"fun"_q,
 	};
 	return result;
 }

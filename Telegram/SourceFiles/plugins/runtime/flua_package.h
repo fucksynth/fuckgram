@@ -28,6 +28,10 @@ inline constexpr auto kPermMtproto = "mtproto";
 
 [[nodiscard]] const std::vector<QString> &KnownPermissions();
 
+// Sections of the plugin catalog a plugin can name in "categories".
+// Unknown names are skipped: they only sort plugins in the catalog.
+[[nodiscard]] const std::vector<QString> &KnownCategories();
+
 // "net:api.example.com" or "net:*.example.com": HTTPS requests to that
 // host (or its subdomains). The host part of a valid one, or nullopt.
 [[nodiscard]] bool IsNetPermission(const QString &permission);
@@ -44,6 +48,7 @@ struct Manifest {
 	int apiMin = 0;
 	int apiMax = 0;
 	std::vector<QString> permissions;
+	std::vector<QString> categories; // known ones, see KnownCategories()
 
 	[[nodiscard]] bool has(const char *permission) const;
 	[[nodiscard]] bool hasNetwork() const;

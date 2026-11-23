@@ -99,3 +99,61 @@ pluginsJournalText: FlatLabel(defaultFlatLabel) {
 		font: font(12px);
 	}
 }
+
+// Catalog.
+pluginsCatalogLogoSize: 84px;
+pluginsCatalogLogoTop: 12px;
+pluginsCatalogTitle: FlatLabel(defaultFlatLabel) {
+	minWidth: 160px;
+	align: align(top);
+	style: TextStyle(defaultTextStyle) {
+		font: font(18px semibold);
+	}
+}
+pluginsCatalogAbout: FlatLabel(defaultFlatLabel) {
+	minWidth: 220px;
+	align: align(top);
+	textFg: windowSubTextFg;
+}
+pluginsCatalogAboutPadding: margins(28px, 6px, 28px, 8px);
+
+pluginsSourceHeight: 60px;
+pluginsSourceBigHeight: 76px;
+pluginsSourceUserpic: 42px;
+pluginsSourceBigUserpic: 56px;
+pluginsSourceLeft: 22px;
+pluginsSourceTextSkip: 14px;
+pluginsSourceRight: 12px;
+pluginsSourceLineSkip: 3px;
+pluginsSourceNameStyle: TextStyle(defaultTextStyle) {
+	font: font(14px semibold);
+}
+pluginsSourceBigNameStyle: TextStyle(defaultTextStyle) {
+	font: font(16px semibold);
+}
+pluginsSourceStatusFont: font(13px);
+pluginsSourceBadgeSkip: 4px;
+
+pluginsCatalogCardPadding: margins(14px, 12px, 6px, 12px);
+pluginsCatalogTextRight: 8px;
+pluginsCatalogVersionFont: font(11px);
+pluginsCatalogVersionHeight: 18px;
+pluginsCatalogVersionPadding: 6px;
+pluginsCatalogVersionSkip: 8px;
+pluginsCatalogAuthorStyle: TextStyle(defaultTextStyle) {
+	font: font(12px);
+}
+pluginsCatalogEmptyPadding: margins(22px, 12px, 22px, 12px);
+
+pluginsCatalogChipsPadding: margins(18px, 4px, 18px, 8px);
+pluginsCatalogChipHeight: 30px;
+pluginsCatalogChipPadding: 13px;
+pluginsCatalogChipSkip: 8px;
+pluginsCatalogChipFont: font(13px semibold);
+
+pluginsActionInstall: icon {{ "menu/download", windowActiveTextFg }};
+pluginsActionInstallOver: icon {{ "menu/download", windowActiveTextFg }};
+pluginsActionUpdate: icon {{ "menu/restore", windowActiveTextFg }};
+pluginsActionUpdateOver: icon {{ "menu/restore", windowActiveTextFg }};
+pluginsActionRemoveSource: icon {{ "menu/delete", windowSubTextFg }};
+pluginsActionRemoveSourceOver: icon {{ "menu/delete", attentionButtonFg }};

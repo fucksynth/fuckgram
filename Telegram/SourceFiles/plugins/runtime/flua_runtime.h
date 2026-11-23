@@ -90,6 +90,15 @@ public:
 	[[nodiscard]] const EngineSettings &engine() const;
 	void setEngine(const EngineSettings &settings);
 	void setPluginEnabled(const QString &id, bool enabled);
+	// Shows what the package is and can do, installs it on "Install".
+	// From a file or an own catalog channel only with "Unknown sources".
+	enum class InstallSource {
+		File,
+		VerifiedChannel,
+		Channel,
+	};
+	void offerInstall(const QString &path, InstallSource source);
+
 	// Removes an installed .flua and the data of the plugin.
 	void removePlugin(const QString &id);
 	// A .flua of the plugin to send, packed for a development folder.
@@ -145,7 +154,6 @@ private:
 	};
 
 	void load(const QString &path);
-	void offerInstall(const QString &path);
 	void install(const QString &path, const QString &id, bool enable);
 	void loadDisabled();
 	void saveDisabled();

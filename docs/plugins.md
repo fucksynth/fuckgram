@@ -67,6 +67,7 @@ turns plugins on and off and opens the plugins folder.
     "icon": "resources/icon.png",
     "api": { "min": 1, "max": 1 },
     "entry": "init.lua",
+    "categories": ["tools"],
     "permissions": ["messages.send", "ui", "storage"]
 }
 ```
@@ -74,13 +75,35 @@ turns plugins on and off and opens the plugins folder.
 `icon` is optional: a square PNG or JPEG in the package, up to 1024×1024
 (without it the card shows the first letter of the name).
 
+`categories` is optional too: the plugin catalog sorts plugins by them.
+Known ones are `appearance`, `chats`, `media`, `privacy`, `tools` and `fun`;
+other names are skipped (`tools/flua_pack.py` warns about them).
+
+### Plugin catalog
+
+Settings → Plugins → Plugin catalog lists plugins posted in Telegram
+channels. To publish a plugin, post its `.flua` file in a public channel:
+the catalog reads the newest 500 documents of the channel, downloads every
+`.flua` among them into `plugins_data/catalog/` and checks it like any
+package (manifest and the code check), so a broken file never installs.
+When the same `id` is posted again, the newest post wins; a newer `version`
+than the installed one shows the plugin under "Updates".
+
+- **Verified channels** are built into the client (now
+  [@fuckgramplugins](https://t.me/fuckgramplugins)): their plugins install
+  with "Unknown sources" off and the install box says "verified source".
+- **Your channels** are added by username or `t.me` link and kept in
+  `plugins_data/catalog.json`. Their plugins install only with "Unknown
+  sources" on, like `.flua` files from chats.
+
 ### Plugin engine
 
 Settings → Plugins → Plugin engine:
 
 - **Developer mode** — development folders reload on save.
 - **Compact view** — cards without descriptions and buttons.
-- **Unknown sources** — off: `.flua` files from chats are not installed.
+- **Unknown sources** — off: `.flua` files from chats and from your own
+  catalog channels are not installed (verified channels still are).
 - **Code check** — always on.
 - **Confirm sensitive actions** (on by default) — `tg.invoke` of payments,
   Stars, gifts (`payments.*` except reading), paid reactions, `auth.*`,
