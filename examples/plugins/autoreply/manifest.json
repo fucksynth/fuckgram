@@ -1,0 +1,12 @@
+{
+    "id": "fuckgram.autoreply",
+    "name": "Автоответчик",
+    "version": "1.0",
+    "author": "fuckgram",
+    "description": "Отвечает за вас в личных сообщениях, пока вас нет: «/away Уехал до понедельника» включает, «/back» выключает. Каждому собеседнику — не чаще раза в полчаса, ботам и каналам — никогда.",
+    "api": { "min": 1, "max": 1 },
+    "entry": "init.lua",
+    "icon": "resources/icon.png",
+    "categories": ["chats"],
+    "permissions": ["messages.read", "messages.send", "chats.read", "ui", "storage"]
+}

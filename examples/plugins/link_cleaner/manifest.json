@@ -1,0 +1,12 @@
+{
+    "id": "fuckgram.link_cleaner",
+    "name": "Чистые ссылки",
+    "version": "1.0",
+    "author": "fuckgram",
+    "description": "Убирает из ссылок в ваших сообщениях метки слежки: utm_*, fbclid, gclid, yclid, si у YouTube и Spotify и другие. Ссылка открывается так же, но сайт не узнает, откуда вы её взяли.",
+    "api": { "min": 1, "max": 1 },
+    "entry": "init.lua",
+    "icon": "resources/icon.png",
+    "categories": ["privacy", "tools"],
+    "permissions": ["messages.send", "ui"]
+}

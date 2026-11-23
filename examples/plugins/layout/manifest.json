@@ -1,0 +1,12 @@
+{
+    "id": "fuckgram.layout",
+    "name": "Раскладка",
+    "version": "1.0",
+    "author": "fuckgram",
+    "description": "Исправляет текст, набранный не в той раскладке: «ghbdtn» → «привет» и обратно. Поле ввода — из меню чата (⋮) или командой «/fix текст», чужое сообщение — из его меню: покажет и скопирует.",
+    "api": { "min": 1, "max": 1 },
+    "entry": "init.lua",
+    "icon": "resources/icon.png",
+    "categories": ["chats", "tools"],
+    "permissions": ["messages.send", "compose", "ui"]
+}
