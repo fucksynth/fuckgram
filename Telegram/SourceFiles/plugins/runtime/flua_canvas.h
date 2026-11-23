@@ -42,14 +42,24 @@ void PushCanvas(
 	not_null<const ImageLookup*> images);
 void InvalidateCanvas(lua_State *L, int index);
 
-// A widget over the window: painted and clicked by a plugin. Sizes are
-// unscaled pixels, `paint` gets them too.
+enum class OverlayDrag {
+	Start,
+	Move,
+	Drop,
+};
+
+// A widget over the window: painted, clicked and dragged by a plugin.
+// Sizes are unscaled pixels, `paint` gets them too. A draggable overlay
+// follows the cursor by itself once a press moves past the drag
+// distance; `drag` gets its top-left in the window then.
 struct OverlayDescriptor {
 	QRect geometry; // relative to `corner`
 	Qt::Corner corner = Qt::TopLeftCorner;
 	bool clickThrough = true;
+	bool draggable = false;
 	Fn<void(QPainter&, QSize)> paint;
 	Fn<void(QPoint)> click;
+	Fn<void(OverlayDrag, QPoint)> drag;
 };
 [[nodiscard]] base::unique_qptr<Ui::RpWidget> CreateOverlay(
 	not_null<Ui::RpWidget*> parent,
@@ -58,5 +68,8 @@ void MoveOverlay(
 	not_null<Ui::RpWidget*> overlay,
 	QRect geometry,
 	Qt::Corner corner);
+
+// The overlay is being dragged: it does not take moves from the plugin.
+[[nodiscard]] bool OverlayDragging(not_null<Ui::RpWidget*> overlay);
 
 } // namespace Plugins::Flua

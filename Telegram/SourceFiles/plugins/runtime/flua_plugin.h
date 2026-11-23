@@ -269,6 +269,7 @@ private:
 	void closeOverlay(int id);
 	void paintOverlay(int id, QPainter &p, QSize size);
 	void clickOverlay(int id, QPoint point);
+	void dragOverlay(int id, OverlayDrag kind, QPoint point);
 	// plugins_data/<id>/files/<name> for a checked name, raises otherwise.
 	[[nodiscard]] QString filePath(lua_State *L, int index) const;
 
@@ -383,6 +384,9 @@ private:
 		Qt::Corner corner = Qt::TopLeftCorner;
 		int paint = kNoRef;
 		int click = kNoRef;
+		int dragStart = kNoRef;
+		int drag = kNoRef;
+		int drop = kNoRef;
 	};
 	std::map<int, OverlayState> _overlays;
 	int _nextOverlayId = 0;
