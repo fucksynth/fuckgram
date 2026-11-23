@@ -175,16 +175,35 @@ jobs:
           Write-Host ('{0:N1} GB -> {1:N1} GB free' -f $before, ((Get-PSDrive C).Free / 1GB))
           exit 0
 
+      - name: Annotate compiler errors.
+        shell: bash
+        run: echo "::add-matcher::$TBUILD/$REPO_NAME/.github/msvc-matcher.json"
+
       - name: Libraries.
         id: libraries
         timeout-minutes: 330
         # breakpad's dump_syms needs ATL, which the runner lacks, and only
         # makes symbols for crash reports, which are off in this build.
         # The wallet engine is Rust: no incremental cargo builds in CI.
+        shell: pwsh
         run: |
-          set SKIP_DUMPSYMS=1
-          set CARGO_INCREMENTAL=0
-          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat %LIBS_ARGS%
+          $env:SKIP_DUMPSYMS = '1'
+          $env:CARGO_INCREMENTAL = '0'
+          & cmd /d /c "$env:TBUILD\$env:REPO_NAME\Telegram\build\prepare\win.bat $env:LIBS_ARGS 2>&1" |
+            Tee-Object -FilePath "$env:TBUILD\prepare.log"
+          exit $LASTEXITCODE
+
+      # The last lines of a failed libraries build, on the run page.
+      - name: Show why the libraries failed.
+        if: failure() && steps.libraries.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $lines = @(Get-Content "$env:TBUILD\prepare.log" -Tail 90 -ErrorAction SilentlyContinue)
+          for ($i = 0; $i -lt $lines.Count; $i += 30) {
+            $part = $lines[$i..([Math]::Min($i + 29, $lines.Count - 1))] -join "`n"
+            $part = $part -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+            Write-Host "::error title=Libraries, lines $($i + 1)-$([Math]::Min($i + 30, $lines.Count)) of the last $($lines.Count)::$part"
+          }
 
       # If the first build did not finish (timeout/cancel), keep what was
       # built so the next run continues instead of starting over.
