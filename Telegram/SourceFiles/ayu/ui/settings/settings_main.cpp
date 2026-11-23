@@ -183,6 +183,19 @@ void BuildUpdates(SectionBuilder &builder) {
 		}, automatic->lifetime());
 	}
 	builder.addButton({
+		.id = u"fuckgram/whats_new"_q,
+		.title = rpl::single(UpdateText("What's new", "Что нового")),
+		.icon = { &st::menuIconFave },
+		.label = UpdateStatusValue() | rpl::map([](const UpdateStatus &s) {
+			return (s.state == UpdateState::Ready)
+				? s.available
+				: s.current;
+		}),
+		.onClick = [] {
+			ShowWhatsNew();
+		},
+	});
+	builder.addButton({
 		.id = u"fuckgram/releases"_q,
 		.title = rpl::single(UpdateText("All versions", "Все версии")),
 		.icon = { &st::menuIconInfo },

@@ -34,6 +34,7 @@ struct UpdateStatus {
 	int64 total = 0;
 	QString error;
 	QString page; // the release on GitHub
+	QString notes; // what is new: of the downloaded or of this release
 };
 
 // At the start of the client: removes what the last update left and
@@ -45,6 +46,10 @@ void CheckForUpdates(bool manual = true);
 
 // Puts the downloaded program in place and restarts.
 void InstallUpdate();
+
+// The notes of the downloaded release (with "Restart"), or of the release
+// this program came from; the releases page if there are none.
+void ShowWhatsNew();
 
 [[nodiscard]] UpdateStatus CurrentUpdateStatus();
 [[nodiscard]] rpl::producer<UpdateStatus> UpdateStatusValue();

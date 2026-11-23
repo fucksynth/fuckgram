@@ -39,6 +39,10 @@ on:
         type: choice
         options: [Debug, Release]
         default: Debug
+      release_version:
+        description: 'A version for a draft release, e.g. 7.2.10 (on "release" only, builds Release); empty: just build'
+        type: string
+        default: ''
 
 concurrency:
   group: win-${{ github.ref }}
@@ -58,9 +62,9 @@ jobs:
     # cached apart ("libs-full"): the Debug cache stays as it is.
     env:
       PREPARE_PATH: "Telegram/build/prepare/prepare.py"
-      BUILD_TYPE: ${{ inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug' }}
-      LIBS: ${{ (inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug') == 'Release' && 'libs-full' || 'libs' }}
-      LIBS_ARGS: ${{ (inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug') == 'Release' && 'silent' || 'skip-release silent' }}
+      BUILD_TYPE: ${{ (inputs.release_version && 'Release') || inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug' }}
+      LIBS: ${{ ((inputs.release_version && 'Release') || inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug') == 'Release' && 'libs-full' || 'libs' }}
+      LIBS_ARGS: ${{ ((inputs.release_version && 'Release') || inputs.build_type || (github.ref == 'refs/heads/release' && 'Release') || 'Debug') == 'Release' && 'silent' || 'skip-release silent' }}
 
     defaults:
       run:
@@ -327,3 +331,72 @@ jobs:
           name: fuckgram-win-x64-${{ env.BUILD_TYPE }}-${{ github.sha }}
           path: artifact\
           retention-days: 2
+
+  # A full version: Actions → Windows → Run workflow on "release" with
+  # "release_version" set. The build becomes a draft release with the zip
+  # and the commits since the last release; the authors edit the notes and
+  # publish it, and only then the clients update to it (docs/releasing.md).
+  # Pushes never make drafts. A job of its own: only it may write.
+  draft:
+    name: Draft the release
+    needs: windows
+    if: github.ref == 'refs/heads/release' && inputs.release_version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        name: Download the build.
+        with:
+          name: fuckgram-win-x64-Release-${{ github.sha }}
+          path: artifact
+
+      - name: Draft.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9A-Za-z._-]+$ ]]; then
+            echo "Bad version: $VERSION"
+            exit 1
+          fi
+          # A draft of this version made before goes; a published one stays.
+          if DRAFT="$(gh release view "$VERSION" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$DRAFT" = "true" ]; then
+              gh release delete "$VERSION" --yes
+            else
+              echo "$VERSION is published already."
+              exit 1
+            fi
+          fi
+          EXE="$(cd artifact && ls *.exe | grep -iv '^updater' | head -n 1)"
+          test -n "$EXE"
+          ZIP="fuckgram-v$VERSION-win-x64-portable.zip"
+          (cd artifact && zip -9 -X "../$ZIP" "$EXE")
+
+          PREVIOUS="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
+          {
+            echo "Added:"
+            echo
+            if [ -n "$PREVIOUS" ] && git rev-parse -q --verify "refs/tags/$PREVIOUS" > /dev/null; then
+              git log --no-merges --format='- %s' "$PREVIOUS..$GITHUB_SHA"
+            else
+              git log --no-merges --format='- %s' -n 30 "$GITHUB_SHA"
+            fi
+            echo
+            echo "commits: https://github.com/$GITHUB_REPOSITORY/commits/$VERSION"
+          } > notes.md
+          cat notes.md
+
+          gh release create "$VERSION" "$ZIP" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "fuckgram Desktop $VERSION" \
+            --notes-file notes.md
+          echo "Draft: https://github.com/$GITHUB_REPOSITORY/releases"

@@ -15,7 +15,11 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "lang/lang_instance.h"
 #include "logs.h"
 #include "settings.h"
+#include "ui/layers/generic_box.h"
+#include "ui/text/text_utilities.h"
+#include "ui/widgets/labels.h"
 #include "window/window_controller.h"
+#include "styles/style_layers.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
@@ -27,7 +31,9 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QUrl>
+#include <QtGui/QDesktopServices>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
@@ -43,6 +49,8 @@ constexpr auto kToastDelay = 5 * crl::time(1000);
 constexpr auto kMaxArchive = qint64(400) * 1024 * 1024;
 constexpr auto kMaxProgram = 900 * 1024 * 1024;
 constexpr auto kMinProgram = 1024 * 1024;
+constexpr auto kMaxNotes = 6000;
+constexpr auto kNotesDelay = 3 * crl::time(1000);
 
 [[nodiscard]] QString Commit() {
 	return QString::fromLatin1(FUCKGRAM_COMMIT).trimmed().toLower();
@@ -81,6 +89,98 @@ constexpr auto kMinProgram = 1024 * 1024;
 	return lower.endsWith(u".zip"_q)
 		&& lower.contains(u"win"_q)
 		&& (lower.contains(u"x64"_q) || lower.contains(u"win64"_q));
+}
+
+// The release notes are Markdown: headings and **bold** become bold,
+// "- " items get bullets, [text](url) and bare links are clickable.
+[[nodiscard]] TextWithEntities NotesText(QString markdown) {
+	markdown.replace(u"\r\n"_q, u"\n"_q);
+	if (markdown.size() > kMaxNotes) {
+		markdown = markdown.left(kMaxNotes) + QString::fromUtf8("\xE2\x80\xA6");
+	}
+	static const auto inline_ = QRegularExpression(
+		u"\\*\\*(.+?)\\*\\*"
+		"|\\[([^\\]]+)\\]\\((https?://[^)\\s]+)\\)"
+		"|(https?://[^\\s<>()]+)"_q);
+	auto result = TextWithEntities();
+	auto first = true;
+	for (auto line : markdown.split(u'\n')) {
+		if (!first) {
+			result.append(u"\n"_q);
+		}
+		first = false;
+		auto trimmed = line.trimmed();
+		auto heading = false;
+		if (trimmed.startsWith(u'#')) {
+			while (trimmed.startsWith(u'#')) {
+				trimmed = trimmed.mid(1);
+			}
+			line = trimmed.trimmed();
+			heading = true;
+		} else if (trimmed.startsWith(u"- "_q) || trimmed.startsWith(u"* "_q)) {
+			line = QString::fromUtf8("\xE2\x80\xA2 ") + trimmed.mid(2);
+		}
+		auto part = TextWithEntities();
+		auto from = 0;
+		auto matches = inline_.globalMatch(line);
+		while (matches.hasNext()) {
+			const auto match = matches.next();
+			part.append(line.mid(from, match.capturedStart() - from));
+			if (!match.captured(1).isEmpty()) {
+				part.append(Ui::Text::Bold(match.captured(1)));
+			} else if (!match.captured(2).isEmpty()) {
+				part.append(Ui::Text::Link(
+					match.captured(2),
+					match.captured(3)));
+			} else {
+				const auto url = match.captured(4);
+				part.append(Ui::Text::Link(url, url));
+			}
+			from = match.capturedEnd();
+		}
+		part.append(line.mid(from));
+		if (heading) {
+			part = Ui::Text::Wrapped(std::move(part), EntityType::Bold);
+		}
+		result.append(std::move(part));
+	}
+	return result;
+}
+
+void ShowNotesBox(
+		const QString &title,
+		const QString &notes,
+		const QString &page,
+		const QString &action,
+		Fn<void()> callback) {
+	const auto window = Core::App().activeWindow();
+	if (!window) {
+		return;
+	}
+	window->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(title));
+		box->setWidth(st::boxWideWidth);
+		const auto label = box->addRow(object_ptr<Ui::FlatLabel>(
+			box,
+			st::boxLabel));
+		label->setMarkedText(notes.trimmed().isEmpty()
+			? TextWithEntities{ UpdateText(
+				"The release has no description.",
+				"У релиза нет описания.") }
+			: NotesText(notes));
+		label->setSelectable(true);
+		box->addButton(rpl::single(action), [=] {
+			box->closeBox();
+			if (callback) {
+				callback();
+			}
+		});
+		if (!page.isEmpty()) {
+			box->addLeftButton(rpl::single(QString("GitHub")), [=] {
+				QDesktopServices::openUrl(QUrl(page));
+			});
+		}
+	}));
 }
 
 void ShowToast(const QString &text) {
@@ -200,12 +300,14 @@ public:
 	void start();
 	void check(bool manual);
 	void install();
+	void showWhatsNew();
 
 private:
 	struct Release {
 		QString id;
 		QString tag;
 		QString page;
+		QString notes;
 		TimeId published = 0;
 		QString archiveUrl;
 		qint64 archiveSize = 0;
@@ -246,9 +348,13 @@ private:
 	TimeId _lastCheck = 0;
 	QString _installedId; // the release this program came from
 	QString _installedTag;
+	QString _installedNotes;
+	QString _installedPage;
 	QString _justInstalled; // a tag to tell about after the restart
 	QString _readyId; // the release downloaded and waiting
 	QString _readyTag;
+	QString _readyNotes;
+	QString _readyPage;
 	qint64 _readySize = 0;
 
 };
@@ -265,6 +371,8 @@ Updater::Updater(QObject *parent)
 	_status.state = supported ? UpdateState::Idle : UpdateState::Disabled;
 	readSettings();
 	_status.current = _installedTag;
+	_status.notes = _installedNotes;
+	_status.page = _installedPage;
 }
 
 const UpdateStatus &Updater::status() const {
@@ -310,16 +418,21 @@ void Updater::readSettings() {
 	_lastCheck = TimeId(json.value(u"last_check"_q).toDouble());
 	_installedId = text("installed_id");
 	_installedTag = text("installed_tag");
+	_installedNotes = text("installed_notes");
+	_installedPage = text("installed_page");
 	_justInstalled = text("just_installed");
 	_readyId = text("ready_id");
 	_readyTag = text("ready_tag");
+	_readyNotes = text("ready_notes");
+	_readyPage = text("ready_page");
 	_readySize = qint64(json.value(u"ready_size"_q).toDouble());
 
 	// The program was replaced by hand: what was kept is about another.
 	// After an update the new program finds "just_installed" instead.
 	if (text("commit") != Commit() && _justInstalled.isEmpty()) {
 		_installedId = _installedTag = _justInstalled = QString();
-		_readyId = _readyTag = QString();
+		_installedNotes = _installedPage = QString();
+		_readyId = _readyTag = _readyNotes = _readyPage = QString();
 		_readySize = 0;
 		_lastCheck = 0;
 	}
@@ -332,9 +445,13 @@ void Updater::writeSettings() const {
 	json.insert(u"commit"_q, Commit());
 	json.insert(u"installed_id"_q, _installedId);
 	json.insert(u"installed_tag"_q, _installedTag);
+	json.insert(u"installed_notes"_q, _installedNotes);
+	json.insert(u"installed_page"_q, _installedPage);
 	json.insert(u"just_installed"_q, _justInstalled);
 	json.insert(u"ready_id"_q, _readyId);
 	json.insert(u"ready_tag"_q, _readyTag);
+	json.insert(u"ready_notes"_q, _readyNotes);
+	json.insert(u"ready_page"_q, _readyPage);
 	json.insert(u"ready_size"_q, double(_readySize));
 	auto file = QFile(SettingsPath());
 	if (file.open(QIODevice::WriteOnly)) {
@@ -358,10 +475,12 @@ void Updater::start() {
 		&& downloaded.exists()
 		&& downloaded.size() == _readySize) {
 		_status.available = _readyTag;
+		_status.notes = _readyNotes;
+		_status.page = _readyPage;
 		// Widgets made before the start learn it too.
 		setState(UpdateState::Ready);
 	} else if (!_readyId.isEmpty() || _readySize) {
-		_readyId = _readyTag = QString();
+		_readyId = _readyTag = _readyNotes = _readyPage = QString();
 		_readySize = 0;
 		writeSettings();
 	}
@@ -370,10 +489,17 @@ void Updater::start() {
 		const auto tag = base::take(_justInstalled);
 		writeSettings();
 		LOG(("Updater: updated to %1").arg(tag));
-		base::call_delayed(kToastDelay, this, [=] {
-			ShowToast(UpdateText(
-				"fuckgram is updated to %1",
-				"fuckgram обновлён до версии %1").arg(tag));
+		const auto notes = _installedNotes;
+		const auto page = _installedPage;
+		base::call_delayed(kNotesDelay, this, [=] {
+			ShowNotesBox(
+				UpdateText(
+					"fuckgram is updated to %1",
+					"fuckgram обновлён до версии %1").arg(tag),
+				notes,
+				page,
+				UpdateText("Great", "Отлично"),
+				nullptr);
 		});
 	}
 	_timer.callEach(kTimerPeriod);
@@ -503,6 +629,8 @@ void Updater::latest(const Release &release, bool same) {
 		// Say in the settings which release this is.
 		_installedId = release.id;
 		_installedTag = _status.current = release.tag;
+		_installedNotes = _status.notes = release.notes;
+		_installedPage = _status.page = release.page;
 	}
 	_lastCheck = base::unixtime::now();
 	writeSettings();
@@ -520,6 +648,7 @@ void Updater::gotRelease(const QByteArray &bytes) {
 		.id = QString::number(qint64(json.value(u"id"_q).toDouble())),
 		.tag = json.value(u"tag_name"_q).toString(),
 		.page = json.value(u"html_url"_q).toString(),
+		.notes = json.value(u"body"_q).toString(),
 		.published = TimeId(QDateTime::fromString(
 			json.value(u"published_at"_q).toString(),
 			Qt::ISODate).toSecsSinceEpoch()),
@@ -546,7 +675,6 @@ void Updater::gotRelease(const QByteArray &bytes) {
 		break;
 	}
 	_status.available = release.tag;
-	_status.page = release.page;
 	_release = release;
 
 	if (release.id == _installedId) {
@@ -666,6 +794,8 @@ void Updater::unpacked(const QString &error) {
 	_lastCheck = base::unixtime::now();
 	_readyId = _release.id;
 	_readyTag = _release.tag;
+	_readyNotes = _status.notes = _release.notes;
+	_readyPage = _status.page = _release.page;
 	_readySize = QFileInfo(DownloadedPath()).size();
 	writeSettings();
 	setState(UpdateState::Ready);
@@ -720,7 +850,9 @@ void Updater::install() {
 	// The new program reads this: it is the release just installed.
 	_installedId = _readyId;
 	_installedTag = _justInstalled = _readyTag;
-	_readyId = _readyTag = QString();
+	_installedNotes = _readyNotes;
+	_installedPage = _readyPage;
+	_readyId = _readyTag = _readyNotes = _readyPage = QString();
 	_readySize = 0;
 	writeSettings();
 	LOG(("Updater: %1 is in place, restarting").arg(_installedTag));
@@ -735,6 +867,29 @@ void Updater::restart() {
 	Core::Quit();
 	if (!Core::Quitting()) {
 		cSetRestarting(false);
+	}
+}
+
+void Updater::showWhatsNew() {
+	if (_status.state == UpdateState::Ready) {
+		ShowNotesBox(
+			UpdateText("What's new in %1", "Что нового в %1").arg(
+				_status.available),
+			_status.notes,
+			_status.page,
+			UpdateText("Restart and update", "Перезапустить и обновить"),
+			[=] { install(); });
+	} else if (!_installedTag.isEmpty()) {
+		ShowNotesBox(
+			UpdateText("What's new in %1", "Что нового в %1").arg(
+				_installedTag),
+			_installedNotes,
+			_installedPage,
+			UpdateText("Close", "Закрыть"),
+			nullptr);
+	} else {
+		QDesktopServices::openUrl(QUrl(u"https://github.com/%1/releases"_q
+			.arg(QString::fromLatin1(kRepository))));
 	}
 }
 
@@ -758,6 +913,10 @@ void CheckForUpdates(bool manual) {
 
 void InstallUpdate() {
 	Instance()->install();
+}
+
+void ShowWhatsNew() {
+	Instance()->showWhatsNew();
 }
 
 UpdateStatus CurrentUpdateStatus() {

@@ -3,25 +3,32 @@
 Users update to the newest **stable release** in
 [Releases](https://github.com/fucksynth/fuckgram/releases): the client
 checks it once a day, downloads its Windows zip, checks it by the SHA-256
-GitHub keeps for every uploaded file, and offers "Update fuckgram" under
-the chat list. Nothing reaches users until a release is published by hand.
+GitHub keeps for every uploaded file, offers "Update fuckgram" under the
+chat list and shows the release notes after the restart ("What's new").
+Nothing reaches users until a release is published by hand.
 
-## Steps
+## A full version
 
-1. Push to `release`. CI builds Release and stamps the build with its
-   commit (`Telegram/SourceFiles/fuckgram/fuckgram_build.h`): only such
-   builds update themselves, Debug builds of `dev` never do.
-2. Download the artifact `fuckgram-win-x64-Release-<sha>` of that run and
-   check the exe yourself.
-3. Pack the exe into a zip whose name has `win` and `x64`, e.g.
-   `fuckgram-v7.2.9-win-x64-portable.zip`. The exe may be at the top or in
-   a folder.
-4. Draft a new release: a new tag (e.g. `7.2.10`) **on the commit the exe
-   was built from** (the run's commit; by default GitHub takes the head of
-   the chosen branch, which is the same if nothing was pushed since),
-   a title, notes, the zip.
-5. Publish it. "Set as a pre-release" keeps it from users: a test build
-   for those who download it by hand.
+1. Actions → Windows → **Run workflow** on `release`, with
+   `release_version` set, e.g. `7.2.10`.
+2. CI builds Release, stamps it with its commit
+   (`Telegram/SourceFiles/fuckgram/fuckgram_build.h`) and makes a **draft**
+   release: tag `7.2.10` on that commit, title "fuckgram Desktop 7.2.10",
+   `fuckgram-v7.2.10-win-x64-portable.zip`, and the commits since the last
+   release as notes. A draft of the same version made before is replaced.
+3. Download the zip from the draft and check it.
+4. Edit the notes (they are the "What's new" window in the client: headings,
+   `**bold**`, lists and links are shown) and **Publish**. "Set as a
+   pre-release" keeps it from users.
+
+Pushes to `release` build Release too (stamped, so they update themselves
+later) but make no drafts; Debug builds of `dev` never update.
+
+## By hand
+
+A release made without the workflow works as well: a zip whose name has
+`win` and `x64` with the exe (at the top or in a folder) of a stamped
+Release build, a tag on the commit the exe was built from.
 
 ## How the client decides
 
