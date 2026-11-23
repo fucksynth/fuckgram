@@ -21,10 +21,21 @@
 
 namespace {
 
-// fuckgram: the other variants are AyuGram-branded, only our own icon
-// is offered (its files live in art/ayu/default).
+// fuckgram: the asterisk in our colors (tools/brand/make_icon.py draws
+// them into art/ayu/<name>); the AyuGram-branded variants are not offered.
 const QVector<QString> icons{
 	AyuAssets::DEFAULT_ICON,
+	u"fg_white"_q,
+	u"fg_ink"_q,
+	u"fg_dark"_q,
+	u"fg_light"_q,
+	u"fg_violet"_q,
+	u"fg_blue"_q,
+	u"fg_cyan"_q,
+	u"fg_green"_q,
+	u"fg_gold"_q,
+	u"fg_pink"_q,
+	u"fg_mono"_q,
 };
 
 const auto rows = static_cast<int>(icons.size()) / IconPicker::kColumns

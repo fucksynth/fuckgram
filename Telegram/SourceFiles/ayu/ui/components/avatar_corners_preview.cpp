@@ -30,7 +30,7 @@ AvatarCornersPreview::AvatarCornersPreview(
 	Ui::EmptyUserpic::UserpicColor(
 		Data::DecideColorIndex(
 			peerFromChannel(ChannelId(2331068091)))),
-	u"AyuGram Releases"_q) {
+	u"fuckgram desktop"_q) {
 	const auto &row = st::defaultDialogRow;
 	setFixedHeight(row.height);
 	setCursor(Qt::PointingHandCursor);
@@ -63,7 +63,7 @@ void AvatarCornersPreview::paintEvent(QPaintEvent *e) {
 		_emptyUserpic.paintCircle(p, userpicX, userpicY, width(), photoSize);
 	}
 
-	const auto nameText = u"AyuGram Releases"_q;
+	const auto nameText = u"fuckgram desktop"_q;
 	p.setPen(st::dialogsNameFg);
 	p.setFont(st::semiboldFont);
 	p.drawText(row.nameLeft + xShift, row.nameTop + st::semiboldFont->ascent, nameText);
@@ -74,7 +74,7 @@ void AvatarCornersPreview::paintEvent(QPaintEvent *e) {
 
 	p.setPen(st::dialogsTextFg);
 	p.setFont(st::dialogsTextFont);
-	p.drawText(row.textLeft + xShift, row.textTop + st::dialogsTextFont->ascent, u"Better late than never"_q);
+	p.drawText(row.textLeft + xShift, row.textTop + st::dialogsTextFont->ascent, u"Telegram Desktop with Lua plugins"_q);
 }
 
 void AvatarCornersPreview::mousePressEvent(QMouseEvent *e) {
@@ -96,14 +96,14 @@ void AvatarCornersPreview::mouseReleaseEvent(QMouseEvent *e) {
 	}
 	if (e->button() == Qt::LeftButton && rect().contains(e->pos())) {
 		_controller->showPeerByLink(Window::PeerByLinkInfo{
-			.usernameOrId = u"AyuGramReleases"_q,
+			.usernameOrId = u"fuckgramdesktop"_q,
 		});
 	}
 }
 
 void AvatarCornersPreview::resolveChannel() {
 	const auto session = &_controller->session();
-	_peer = session->data().peerByUsername(u"AyuGramReleases"_q);
+	_peer = session->data().peerByUsername(u"fuckgramdesktop"_q);
 	if (_peer) {
 		_peer->loadUserpic();
 		subscribeToUpdates();
@@ -112,7 +112,7 @@ void AvatarCornersPreview::resolveChannel() {
 	const auto weak = base::make_weak(this);
 	session->api().request(MTPcontacts_ResolveUsername(
 		MTP_flags(0),
-		MTP_string(u"AyuGramReleases"_q),
+		MTP_string(u"fuckgramdesktop"_q),
 		MTP_string()
 	)).done([=](const MTPcontacts_ResolvedPeer &result) {
 		if (const auto strong = weak.get()) {

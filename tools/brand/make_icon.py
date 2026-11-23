@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate the fuckgram app icon: SVG source, PNGs and .ico.
 
-The icon is a red asterisk (the one from "f*ck") on a dark-to-red
-diagonal gradient circle. Everything is drawn from the numbers below,
-so tweak them and re-run:
+The icon is a light red asterisk (the one from "f*ck") on a dark-to-red
+diagonal gradient circle; VARIANTS are the other colors offered in
+Settings > fuckgram > Appearance > App icon. Everything is drawn from the
+numbers below, so tweak them and re-run:
 
     python tools/brand/make_icon.py            # write into the repo
     python tools/brand/make_icon.py --preview  # only tools/brand/out/
@@ -29,8 +30,35 @@ BAR_SMALL = dict(x=43.0, y=21.5, w=14.0, h=57.0)  # thicker for <= 32 px
 ANGLES = (0, 60, -60)
 
 # Gradients: (start point, end point, [(offset, hex)]).
-BACKGROUND = ((14, 14), (86, 86), [(0.0, "#3a0006"), (0.5, "#9c000a"), (1.0, "#ff1f1f")])
-GLYPH = ((30, 22), (72, 82), [(0.0, "#a00000"), (0.65, "#ff1010"), (1.0, "#ff2a2a")])
+def bg(*colors):
+    step = 1.0 / (len(colors) - 1)
+    return ((14, 14), (86, 86), [(i * step, c) for i, c in enumerate(colors)])
+
+
+def glyph(top, bottom):
+    return ((30, 22), (72, 82), [(0.0, top), (1.0, bottom)])
+
+
+RED = bg("#3a0006", "#9c000a", "#ff1f1f")
+BACKGROUND = RED
+# Light red: readable from afar, still red.
+GLYPH = glyph("#ff8a8a", "#ff5c5c")
+
+# Folder in art/ayu -> (background, glyph). "default" is the main icon.
+VARIANTS = {
+    "default": (RED, GLYPH),
+    "fg_white": (RED, glyph("#ffffff", "#ffe9e9")),
+    "fg_ink": (bg("#ff4d4d", "#e00012", "#9c000a"), glyph("#2a0004", "#120002")),
+    "fg_dark": (bg("#3a3a3a", "#1c1c1c", "#0a0a0a"), glyph("#ff6b6b", "#ff2a2a")),
+    "fg_light": (bg("#ffffff", "#f1f1f1", "#d9d9d9"), glyph("#ff3b3b", "#d0000c")),
+    "fg_violet": (bg("#21003f", "#6a1fd6", "#b06bff"), glyph("#ffffff", "#f1e3ff")),
+    "fg_blue": (bg("#001634", "#0a56e0", "#43a2ff"), glyph("#ffffff", "#e3f0ff")),
+    "fg_cyan": (bg("#002a33", "#008ea3", "#33e0f0"), glyph("#ffffff", "#e0fbff")),
+    "fg_green": (bg("#002411", "#0a8f37", "#33e070"), glyph("#ffffff", "#e3ffe9")),
+    "fg_gold": (bg("#3a2200", "#c07f00", "#ffd04a"), glyph("#ffffff", "#fff3d6")),
+    "fg_pink": (bg("#40002a", "#d6267f", "#ff7ac0"), glyph("#ffffff", "#ffe6f3")),
+    "fg_mono": (bg("#1e1e1e", "#555555", "#9a9a9a"), glyph("#ffffff", "#ececec")),
+}
 
 SUPER = 2048  # supersampled canvas
 
@@ -76,18 +104,27 @@ def circle_mask(size, radius, center=50.0):
     return mask
 
 
-def master(bar, circle_r=CIRCLE_R):
+_MASTERS = {}
+
+
+def master(bar, colors, circle_r=CIRCLE_R):
+    key = (tuple(bar.items()), repr(colors), circle_r)
+    if key in _MASTERS:
+        return _MASTERS[key]
+    background, glyph_spec = colors
     size = SUPER
-    bg = gradient(size, BACKGROUND).convert("RGBA")
-    bg.putalpha(circle_mask(size, circle_r))
-    glyph = gradient(size, GLYPH).convert("RGBA")
-    glyph.putalpha(ImageChops.multiply(asterisk_mask(size, bar), circle_mask(size, circle_r)))
-    return Image.alpha_composite(bg, glyph)
+    back = gradient(size, background).convert("RGBA")
+    back.putalpha(circle_mask(size, circle_r))
+    front = gradient(size, glyph_spec).convert("RGBA")
+    front.putalpha(ImageChops.multiply(asterisk_mask(size, bar), circle_mask(size, circle_r)))
+    result = _MASTERS[key] = Image.alpha_composite(back, front)
+    return result
 
 
-def render(pixels, margin=0.0):
+def render(pixels, margin=0.0, colors=None):
     """Icon at `pixels` size; margin is the transparent border in % of size."""
-    image = master(BAR_SMALL if pixels <= 32 else BAR)
+    colors = colors or (BACKGROUND, GLYPH)
+    image = master(BAR_SMALL if pixels <= 32 else BAR, colors)
     if margin:
         inner = round(SUPER * (1 - 2 * margin / 100.0))
         canvas = Image.new("RGBA", (SUPER, SUPER), (0, 0, 0, 0))
@@ -97,12 +134,12 @@ def render(pixels, margin=0.0):
     return image.resize((pixels, pixels), Image.LANCZOS)
 
 
-def write_ico(path, sizes):
+def write_ico(path, sizes, colors=None):
     """ICO with a separately rendered PNG frame for every size."""
     frames = []
     for s in sizes:
         buffer = io.BytesIO()
-        render(s).save(buffer, "PNG", optimize=True)
+        render(s, colors=colors).save(buffer, "PNG", optimize=True)
         frames.append((s, buffer.getvalue()))
     header = struct.pack("<HHH", 0, 1, len(frames))
     offset = 6 + 16 * len(frames)
@@ -116,12 +153,14 @@ def write_ico(path, sizes):
         f.write(header + entries + blobs)
 
 
-def svg():
+def svg(colors=None):
+    background, glyph_spec = colors or (BACKGROUND, GLYPH)
+
     def stops(spec):
         return "".join(
             '<stop offset="%g" stop-color="%s"/>' % (o, c) for o, c in spec[2])
-    (bx1, by1), (bx2, by2), _ = BACKGROUND
-    (gx1, gy1), (gx2, gy2), _ = GLYPH
+    (bx1, by1), (bx2, by2), _ = background
+    (gx1, gy1), (gx2, gy2), _ = glyph_spec
     bars = "".join(
         '<rect x="%g" y="%g" width="%g" height="%g" rx="%g"%s/>' % (
             BAR["x"], BAR["y"], BAR["w"], BAR["h"], BAR["w"] / 2,
@@ -151,6 +190,16 @@ def main():
         sheet.alpha_composite(render(s), (x, 140 - s - 6))
         x += s + 10
     sheet.save(os.path.join(OUT, "sizes_dark.png"))
+    # All the variants, as the icon picker shows them.
+    names = list(VARIANTS)
+    columns = 4
+    cell = 140
+    rows = (len(names) + columns - 1) // columns
+    picker = Image.new("RGBA", (columns * cell, rows * cell), (24, 30, 38, 255))
+    for i, name in enumerate(names):
+        x, y = (i % columns) * cell, (i // columns) * cell
+        picker.alpha_composite(render(112, colors=VARIANTS[name]), (x + 14, y + 14))
+    picker.save(os.path.join(OUT, "variants.png"))
     if preview:
         print("preview written to", OUT)
         return
@@ -158,9 +207,12 @@ def main():
     # Windows executable icon and the default in-app icon.
     sizes = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256]
     write_ico(os.path.join(ART, "icon256.ico"), sizes)
-    write_ico(os.path.join(ART, "ayu", "default", "app_icon.ico"), sizes)
-    with open(os.path.join(ART, "ayu", "default", "app.svg"), "w", encoding="utf-8") as f:
-        f.write(svg())
+    for name, colors in VARIANTS.items():
+        folder = os.path.join(ART, "ayu", name)
+        os.makedirs(folder, exist_ok=True)
+        write_ico(os.path.join(folder, "app_icon.ico"), sizes, colors)
+        with open(os.path.join(folder, "app.svg"), "w", encoding="utf-8") as f:
+            f.write(svg(colors))
     # Window / tray / Linux icons.
     for s in (16, 32, 48, 64, 128, 256, 512):
         render(s).save(os.path.join(ART, "icon%d.png" % s), optimize=True)
