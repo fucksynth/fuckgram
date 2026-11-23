@@ -86,12 +86,13 @@ end)
 
 ## Скачать
 
-Последняя сборка — в [Releases](https://github.com/fucksynth/fuckgram/releases/latest):
-`fuckgram-win-x64.zip` с `fuckgram.exe`. Положите exe в отдельную папку:
-данные он хранит рядом с собой. Дальше fuckgram обновляется сам: раз в сутки
-проверяет релизы, скачивает новую сборку в фоне, сверяет SHA-256 и
-предлагает «Обновить fuckgram» под списком чатов (настройки fuckgram →
-Обновления).
+Последняя версия — в [Releases](https://github.com/fucksynth/fuckgram/releases/latest):
+zip `win-x64` с `fuckgram.exe`. Положите exe в отдельную папку: данные он
+хранит рядом с собой. Дальше fuckgram сам обновляется до каждого нового
+стабильного релиза: раз в сутки проверяет, скачивает новую версию в фоне,
+сверяет SHA-256 и предлагает «Обновить fuckgram» под списком чатов
+(настройки fuckgram → Обновления). Пре-релизы не предлагаются. Как
+выпускать релиз: [docs/releasing.md](docs/releasing.md).
 
 Debug-сборки ветки `dev` — в [GitHub Actions](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
 (скачивание после входа в GitHub, хранятся 2 дня); сами они не обновляются.

@@ -19,6 +19,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
+#include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -26,6 +27,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QPointer>
+#include <QtCore/QUrl>
 #include <QtNetwork/QNetworkAccessManager>
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
@@ -34,9 +36,6 @@ namespace Fuckgram {
 namespace {
 
 constexpr auto kRepository = "fucksynth/fuckgram";
-constexpr auto kArchive = "fuckgram-win-x64.zip";
-constexpr auto kDescription = "update.json";
-constexpr auto kTagPrefix = "build-";
 constexpr auto kCheckPeriod = TimeId(24 * 60 * 60);
 constexpr auto kFirstCheckDelay = 30 * crl::time(1000);
 constexpr auto kTimerPeriod = 60 * 60 * crl::time(1000);
@@ -44,6 +43,14 @@ constexpr auto kToastDelay = 5 * crl::time(1000);
 constexpr auto kMaxArchive = qint64(400) * 1024 * 1024;
 constexpr auto kMaxProgram = 900 * 1024 * 1024;
 constexpr auto kMinProgram = 1024 * 1024;
+
+[[nodiscard]] QString Commit() {
+	return QString::fromLatin1(FUCKGRAM_COMMIT).trimmed().toLower();
+}
+
+[[nodiscard]] TimeId CommitTime() {
+	return TimeId(FUCKGRAM_COMMIT_TIME);
+}
 
 [[nodiscard]] QString SettingsPath() {
 	return cWorkingDir() + u"tdata/fuckgram_updates.json"_q;
@@ -57,8 +64,23 @@ constexpr auto kMinProgram = 1024 * 1024;
 	return ProgramPath() + u".new"_q;
 }
 
-[[nodiscard]] QString ReleasesUrl() {
-	return u"https://github.com/%1/releases/download/"_q.arg(kRepository);
+[[nodiscard]] QString ApiUrl(const QString &path) {
+	return u"https://api.github.com/repos/%1/%2"_q.arg(
+		QString::fromLatin1(kRepository),
+		path);
+}
+
+[[nodiscard]] QString DownloadsUrl() {
+	return u"https://github.com/%1/releases/download/"_q.arg(
+		QString::fromLatin1(kRepository));
+}
+
+// The Windows x64 zip of a release: "fuckgram-v7.2.9-win-x64-portable.zip".
+[[nodiscard]] bool WindowsArchive(const QString &name) {
+	const auto lower = name.toLower();
+	return lower.endsWith(u".zip"_q)
+		&& lower.contains(u"win"_q)
+		&& (lower.contains(u"x64"_q) || lower.contains(u"win64"_q));
 }
 
 void ShowToast(const QString &text) {
@@ -87,26 +109,37 @@ struct UnpackResult {
 		QByteArray archive,
 		qint64 size,
 		QByteArray sha256,
+		QString programName,
 		QString target) {
 	if (archive.size() != size) {
 		return { UnpackError::Size };
 	}
-	const auto hash = QCryptographicHash::hash(
-		archive,
-		QCryptographicHash::Sha256).toHex().toLower();
-	if (hash != sha256) {
-		return { UnpackError::Checksum };
+	if (!sha256.isEmpty()) {
+		const auto hash = QCryptographicHash::hash(
+			archive,
+			QCryptographicHash::Sha256).toHex().toLower();
+		if (hash != sha256) {
+			return { UnpackError::Checksum };
+		}
 	}
+	// The program of the same name, or the biggest program in the
+	// archive; the archive may keep it in a folder.
 	auto zip = zlib::FileToRead(archive);
 	auto program = QByteArray();
 	if (zip.goToFirstFile() == UNZ_OK) {
 		do {
-			const auto name = zip.getCurrentFileName();
-			if (name.endsWith(u".exe"_q, Qt::CaseInsensitive)
-				&& !name.contains(u'/')
-				&& !name.contains(u'\\')
-				&& name.compare(u"Updater.exe"_q, Qt::CaseInsensitive)) {
-				program = zip.readCurrentFileContent(kMaxProgram);
+			const auto path = zip.getCurrentFileName();
+			const auto name = path.mid(path.lastIndexOf(u'/') + 1);
+			if (!name.endsWith(u".exe"_q, Qt::CaseInsensitive)
+				|| !name.compare(u"Updater.exe"_q, Qt::CaseInsensitive)) {
+				continue;
+			}
+			const auto same = !name.compare(programName, Qt::CaseInsensitive);
+			auto content = zip.readCurrentFileContent(kMaxProgram);
+			if (same || content.size() > program.size()) {
+				program = std::move(content);
+			}
+			if (same) {
 				break;
 			}
 		} while (zip.goToNextFile() == UNZ_OK);
@@ -169,17 +202,30 @@ public:
 	void install();
 
 private:
-	void restart();
+	struct Release {
+		QString id;
+		QString tag;
+		QString page;
+		TimeId published = 0;
+		QString archiveUrl;
+		qint64 archiveSize = 0;
+		QByteArray sha256; // hex, lowercase; empty if GitHub gave none
+	};
+
 	void setState(UpdateState state);
 	void changed();
 	void readSettings();
 	void writeSettings() const;
 	void checkIfDue();
 	void fail(const QString &error);
+	void latest(const Release &release, bool same);
 	void cleanup();
-	[[nodiscard]] QNetworkReply *get(const QString &url, bool api);
+	void restart();
+	[[nodiscard]] QNetworkReply *get(
+		const QString &url,
+		const QByteArray &accept = QByteArray());
 	void gotRelease(const QByteArray &bytes);
-	void gotDescription(const QByteArray &bytes);
+	void gotTagCommit(const QString &commit);
 	void download();
 	void downloaded(const QByteArray &bytes);
 	void unpacked(const QString &error);
@@ -188,35 +234,37 @@ private:
 	UpdateStatus _status;
 	rpl::event_stream<> _changes;
 	base::Timer _timer;
-	bool _started = false;
-	bool _auto = true;
-	bool _manual = false;
-	TimeId _lastCheck = 0;
-	int _installed = 0;
-	// The downloaded program waiting for a restart, kept between runs.
-	int _readyBuild = 0;
-	qint64 _readySize = 0;
-	bool _swapped = false;
-	QString _archiveUrl;
-	qint64 _archiveSize = 0;
-	QString _descriptionUrl;
-	QByteArray _sha256; // hex, lowercase
 	QPointer<QNetworkReply> _reply;
+	Release _release;
 	int _percent = -1;
+	bool _started = false;
+	bool _manual = false;
+	bool _swapped = false;
+
+	// Kept in tdata/fuckgram_updates.json.
+	bool _auto = true;
+	TimeId _lastCheck = 0;
+	QString _installedId; // the release this program came from
+	QString _installedTag;
+	QString _justInstalled; // a tag to tell about after the restart
+	QString _readyId; // the release downloaded and waiting
+	QString _readyTag;
+	qint64 _readySize = 0;
 
 };
 
 Updater::Updater(QObject *parent)
 : QObject(parent)
 , _timer([=] { checkIfDue(); }) {
-	_status.current = CurrentBuild();
+	_status.commit = Commit();
 #ifdef Q_OS_WIN
-	const auto supported = (_status.current > 0);
+	const auto supported = !_status.commit.isEmpty();
 #else // Q_OS_WIN
 	const auto supported = false;
 #endif // Q_OS_WIN
 	_status.state = supported ? UpdateState::Idle : UpdateState::Disabled;
 	readSettings();
+	_status.current = _installedTag;
 }
 
 const UpdateStatus &Updater::status() const {
@@ -255,19 +303,38 @@ void Updater::readSettings() {
 		return;
 	}
 	const auto json = QJsonDocument::fromJson(file.readAll()).object();
+	const auto text = [&](const char *key) {
+		return json.value(QString::fromLatin1(key)).toString();
+	};
 	_auto = json.value(u"auto"_q).toBool(true);
 	_lastCheck = TimeId(json.value(u"last_check"_q).toDouble());
-	_installed = json.value(u"installed"_q).toInt();
-	_readyBuild = json.value(u"ready_build"_q).toInt();
+	_installedId = text("installed_id");
+	_installedTag = text("installed_tag");
+	_justInstalled = text("just_installed");
+	_readyId = text("ready_id");
+	_readyTag = text("ready_tag");
 	_readySize = qint64(json.value(u"ready_size"_q).toDouble());
+
+	// The program was replaced by hand: what was kept is about another.
+	// After an update the new program finds "just_installed" instead.
+	if (text("commit") != Commit() && _justInstalled.isEmpty()) {
+		_installedId = _installedTag = _justInstalled = QString();
+		_readyId = _readyTag = QString();
+		_readySize = 0;
+		_lastCheck = 0;
+	}
 }
 
 void Updater::writeSettings() const {
 	auto json = QJsonObject();
 	json.insert(u"auto"_q, _auto);
 	json.insert(u"last_check"_q, double(_lastCheck));
-	json.insert(u"installed"_q, _installed);
-	json.insert(u"ready_build"_q, _readyBuild);
+	json.insert(u"commit"_q, Commit());
+	json.insert(u"installed_id"_q, _installedId);
+	json.insert(u"installed_tag"_q, _installedTag);
+	json.insert(u"just_installed"_q, _justInstalled);
+	json.insert(u"ready_id"_q, _readyId);
+	json.insert(u"ready_tag"_q, _readyTag);
 	json.insert(u"ready_size"_q, double(_readySize));
 	auto file = QFile(SettingsPath());
 	if (file.open(QIODevice::WriteOnly)) {
@@ -280,39 +347,34 @@ void Updater::start() {
 		return;
 	}
 	_started = true;
+	if (_status.state == UpdateState::Disabled) {
+		cleanup();
+		return;
+	}
 	// An update downloaded in an earlier run and not installed yet.
 	const auto downloaded = QFileInfo(DownloadedPath());
-	if (_status.state != UpdateState::Disabled
-		&& _readyBuild > _status.current
+	if (!_readyId.isEmpty()
+		&& _readyId != _installedId
 		&& downloaded.exists()
 		&& downloaded.size() == _readySize) {
-		_status.available = _readyBuild;
+		_status.available = _readyTag;
 		// Widgets made before the start learn it too.
 		setState(UpdateState::Ready);
-	} else if (_readyBuild || _readySize) {
-		_readyBuild = 0;
+	} else if (!_readyId.isEmpty() || _readySize) {
+		_readyId = _readyTag = QString();
 		_readySize = 0;
 		writeSettings();
 	}
 	cleanup();
-	if (_status.state == UpdateState::Disabled) {
-		return;
-	}
-	if (_installed != _status.current) {
-		const auto was = _installed;
-		_installed = _status.current;
+	if (!_justInstalled.isEmpty()) {
+		const auto tag = base::take(_justInstalled);
 		writeSettings();
-		if (was > 0 && was < _status.current) {
-			LOG(("Updater: updated from build %1 to %2"
-				).arg(was
-				).arg(_status.current));
-			const auto build = _status.current;
-			base::call_delayed(kToastDelay, this, [=] {
-				ShowToast(UpdateText(
-					"fuckgram is updated to build %1",
-					"fuckgram обновлён до сборки %1").arg(build));
-			});
-		}
+		LOG(("Updater: updated to %1").arg(tag));
+		base::call_delayed(kToastDelay, this, [=] {
+			ShowToast(UpdateText(
+				"fuckgram is updated to %1",
+				"fuckgram обновлён до версии %1").arg(tag));
+		});
 	}
 	_timer.callEach(kTimerPeriod);
 	base::call_delayed(kFirstCheckDelay, this, [=] {
@@ -367,14 +429,14 @@ void Updater::fail(const QString &error) {
 	}
 }
 
-QNetworkReply *Updater::get(const QString &url, bool api) {
+QNetworkReply *Updater::get(const QString &url, const QByteArray &accept) {
 	auto request = QNetworkRequest(QUrl(url));
 	request.setAttribute(
 		QNetworkRequest::RedirectPolicyAttribute,
 		QNetworkRequest::NoLessSafeRedirectPolicy);
 	request.setRawHeader("User-Agent", "fuckgram-updater");
-	if (api) {
-		request.setRawHeader("Accept", "application/vnd.github+json");
+	if (!accept.isEmpty()) {
+		request.setRawHeader("Accept", accept);
 	}
 	// An aborted request finishes right away: it is not current by then.
 	if (const auto previous = base::take(_reply)) {
@@ -411,10 +473,10 @@ void Updater::check(bool manual) {
 	_status.received = _status.total = 0;
 	setState(UpdateState::Checking);
 
+	// The newest release that is not a draft and not a pre-release.
 	const auto reply = get(
-		u"https://api.github.com/repos/%1/releases/latest"_q.arg(
-			kRepository),
-		true);
+		ApiUrl(u"releases/latest"_q),
+		"application/vnd.github+json");
 	connect(reply, &QNetworkReply::finished, this, [=] {
 		reply->deleteLater();
 		if (_reply != reply) {
@@ -425,9 +487,7 @@ void Updater::check(bool manual) {
 			QNetworkRequest::HttpStatusCodeAttribute).toInt();
 		if (code == 404) {
 			// No releases yet.
-			_lastCheck = base::unixtime::now();
-			writeSettings();
-			setState(UpdateState::Latest);
+			latest({}, false);
 			return;
 		} else if (reply->error() != QNetworkReply::NoError) {
 			fail(reply->errorString());
@@ -437,95 +497,112 @@ void Updater::check(bool manual) {
 	});
 }
 
-void Updater::gotRelease(const QByteArray &bytes) {
-	const auto release = QJsonDocument::fromJson(bytes).object();
-	const auto tag = release.value(u"tag_name"_q).toString();
-	const auto prefix = QString::fromLatin1(kTagPrefix);
-	const auto build = tag.startsWith(prefix)
-		? tag.mid(prefix.size()).toInt()
-		: 0;
-	if (build <= 0) {
-		fail(UpdateText(
-			"the newest release is not a build: ",
-			"последний релиз — не сборка: ") + tag);
-		return;
+// `same`: this program is the release, not only newer than it.
+void Updater::latest(const Release &release, bool same) {
+	if (same && !release.id.isEmpty() && _installedId != release.id) {
+		// Say in the settings which release this is.
+		_installedId = release.id;
+		_installedTag = _status.current = release.tag;
 	}
-	_status.available = build;
-	_status.page = release.value(u"html_url"_q).toString();
-	if (build <= _status.current) {
-		_lastCheck = base::unixtime::now();
-		writeSettings();
-		setState(UpdateState::Latest);
-		if (_manual) {
-			ShowToast(UpdateText(
-				"fuckgram is up to date.",
-				"У вас последняя версия fuckgram."));
-		}
-		return;
+	_lastCheck = base::unixtime::now();
+	writeSettings();
+	setState(UpdateState::Latest);
+	if (_manual) {
+		ShowToast(UpdateText(
+			"fuckgram is up to date.",
+			"У вас последняя версия fuckgram."));
 	}
+}
 
-	_archiveUrl = _descriptionUrl = QString();
-	_archiveSize = 0;
-	for (const auto value : release.value(u"assets"_q).toArray()) {
+void Updater::gotRelease(const QByteArray &bytes) {
+	const auto json = QJsonDocument::fromJson(bytes).object();
+	auto release = Release{
+		.id = QString::number(qint64(json.value(u"id"_q).toDouble())),
+		.tag = json.value(u"tag_name"_q).toString(),
+		.page = json.value(u"html_url"_q).toString(),
+		.published = TimeId(QDateTime::fromString(
+			json.value(u"published_at"_q).toString(),
+			Qt::ISODate).toSecsSinceEpoch()),
+	};
+	if (release.tag.isEmpty() || release.id == u"0"_q) {
+		fail(UpdateText(
+			"GitHub answered something unexpected",
+			"GitHub ответил что-то не то"));
+		return;
+	}
+	for (const auto value : json.value(u"assets"_q).toArray()) {
 		const auto asset = value.toObject();
 		const auto name = asset.value(u"name"_q).toString();
 		const auto url = asset.value(u"browser_download_url"_q).toString();
-		if (!url.startsWith(ReleasesUrl())) {
+		if (!WindowsArchive(name) || !url.startsWith(DownloadsUrl())) {
 			continue;
-		} else if (name == QString::fromLatin1(kArchive)) {
-			_archiveUrl = url;
-			_archiveSize = qint64(asset.value(u"size"_q).toDouble());
-		} else if (name == QString::fromLatin1(kDescription)) {
-			_descriptionUrl = url;
 		}
+		const auto digest = asset.value(u"digest"_q).toString().toLower();
+		release.archiveUrl = url;
+		release.archiveSize = qint64(asset.value(u"size"_q).toDouble());
+		release.sha256 = digest.startsWith(u"sha256:"_q)
+			? digest.mid(7).toLatin1()
+			: QByteArray();
+		break;
 	}
-	if (_archiveUrl.isEmpty() || _descriptionUrl.isEmpty()) {
+	_status.available = release.tag;
+	_status.page = release.page;
+	_release = release;
+
+	if (release.id == _installedId) {
+		latest(release, true);
+		return;
+	} else if (release.published > 0 && release.published <= CommitTime()) {
+		// This program is newer than the release.
+		latest(release, false);
+		return;
+	} else if (release.archiveUrl.isEmpty()) {
 		fail(UpdateText(
-			"the release has no files for Windows",
-			"в релизе нет файлов для Windows"));
+			"the newest release has no build for Windows x64",
+			"в последнем релизе нет сборки для Windows x64"));
+		return;
+	} else if (release.archiveSize <= 0
+		|| release.archiveSize > kMaxArchive
+		|| (!release.sha256.isEmpty() && release.sha256.size() != 64)) {
+		fail(UpdateText(
+			"the archive of the release looks wrong",
+			"архив релиза выглядит не так"));
 		return;
 	}
-	const auto reply = get(_descriptionUrl, false);
+
+	// The commit of the tag: a program made of it needs no update.
+	const auto reply = get(
+		ApiUrl(u"commits/"_q
+			+ QString::fromLatin1(QUrl::toPercentEncoding(release.tag))),
+		"application/vnd.github.sha");
 	connect(reply, &QNetworkReply::finished, this, [=] {
 		reply->deleteLater();
 		if (_reply != reply) {
 			return;
 		}
 		_reply = nullptr;
-		if (reply->error() != QNetworkReply::NoError) {
-			fail(reply->errorString());
-			return;
-		}
-		gotDescription(reply->readAll());
+		const auto good = (reply->error() == QNetworkReply::NoError);
+		gotTagCommit(good
+			? QString::fromLatin1(reply->read(64)).trimmed().toLower()
+			: QString());
 	});
 }
 
-void Updater::gotDescription(const QByteArray &bytes) {
-	const auto json = QJsonDocument::fromJson(bytes).object();
-	const auto build = json.value(u"build"_q).toInt();
-	const auto size = qint64(json.value(u"size"_q).toDouble());
-	const auto sha256 = json.value(u"sha256"_q).toString().toLower().toLatin1();
-	if (build != _status.available
-		|| size != _archiveSize
-		|| size <= 0
-		|| size > kMaxArchive
-		|| sha256.size() != 64) {
-		fail(UpdateText(
-			"the description of the update does not match the release",
-			"описание обновления не совпадает с релизом"));
+void Updater::gotTagCommit(const QString &commit) {
+	if (!commit.isEmpty() && commit == Commit()) {
+		latest(_release, true);
 		return;
 	}
-	_sha256 = sha256;
 	download();
 }
 
 void Updater::download() {
 	_status.received = 0;
-	_status.total = _archiveSize;
+	_status.total = _release.archiveSize;
 	_percent = -1;
 	setState(UpdateState::Downloading);
 
-	const auto reply = get(_archiveUrl, false);
+	const auto reply = get(_release.archiveUrl);
 	connect(reply, &QNetworkReply::downloadProgress, this, [=](
 			qint64 received,
 			qint64 total) {
@@ -562,12 +639,13 @@ void Updater::download() {
 }
 
 void Updater::downloaded(const QByteArray &bytes) {
-	const auto size = _archiveSize;
-	const auto sha256 = _sha256;
+	const auto size = _release.archiveSize;
+	const auto sha256 = _release.sha256;
+	const auto name = QFileInfo(ProgramPath()).fileName();
 	const auto target = DownloadedPath();
 	const auto guard = QPointer<Updater>(this);
 	crl::async([=] {
-		const auto result = Unpack(bytes, size, sha256, target);
+		const auto result = Unpack(bytes, size, sha256, name, target);
 		crl::on_main([=] {
 			if (const auto strong = guard.data()) {
 				strong->unpacked(UnpackErrorText(result));
@@ -584,17 +662,19 @@ void Updater::unpacked(const QString &error) {
 		fail(error);
 		return;
 	}
-	LOG(("Updater: build %1 is ready").arg(_status.available));
+	LOG(("Updater: %1 is ready").arg(_release.tag));
 	_lastCheck = base::unixtime::now();
-	_readyBuild = _status.available;
+	_readyId = _release.id;
+	_readyTag = _release.tag;
 	_readySize = QFileInfo(DownloadedPath()).size();
 	writeSettings();
 	setState(UpdateState::Ready);
 	ShowToast(UpdateText(
-		"The fuckgram update is downloaded: "
+		"fuckgram %1 is downloaded: "
 		"press \"Update fuckgram\" under the chat list.",
-		"Обновление fuckgram скачано: "
-		"нажмите «Обновить fuckgram» под списком чатов."));
+		"fuckgram %1 скачан: "
+		"нажмите «Обновить fuckgram» под списком чатов."
+	).arg(_release.tag));
 }
 
 // The running program can not be overwritten on Windows, but can be
@@ -610,6 +690,9 @@ void Updater::install() {
 	const auto program = ProgramPath();
 	const auto fresh = DownloadedPath();
 	if (!QFile::exists(fresh)) {
+		_readyId = _readyTag = QString();
+		_readySize = 0;
+		writeSettings();
 		fail(UpdateText(
 			"the downloaded update is gone",
 			"скачанное обновление пропало"));
@@ -634,16 +717,18 @@ void Updater::install() {
 		return;
 	}
 	_swapped = true;
-	_readyBuild = 0;
+	// The new program reads this: it is the release just installed.
+	_installedId = _readyId;
+	_installedTag = _justInstalled = _readyTag;
+	_readyId = _readyTag = QString();
 	_readySize = 0;
 	writeSettings();
-	LOG(("Updater: build %1 is in place, restarting"
-		).arg(_status.available));
+	LOG(("Updater: %1 is in place, restarting").arg(_installedTag));
 	restart();
 }
 
 // A quit can be cancelled (a download or an upload is going): then the
-// client goes on, and only the next quit of this button restarts it.
+// client goes on, and only the next press of the button restarts it.
 void Updater::restart() {
 	cSetRestarting(true);
 	cSetRestartingToSettings(false);
@@ -662,10 +747,6 @@ void Updater::restart() {
 }
 
 } // namespace
-
-int CurrentBuild() {
-	return FUCKGRAM_BUILD;
-}
 
 void StartUpdater() {
 	Instance()->start();
@@ -700,11 +781,14 @@ QString UpdateStatusText(const UpdateStatus &status) {
 	case UpdateState::Disabled:
 		return UpdateText("Release builds only", "Только релизные сборки");
 	case UpdateState::Idle:
-		return UpdateText("Build %1", "Сборка %1").arg(status.current);
+	case UpdateState::Latest:
+		if (!status.current.isEmpty()) {
+			return UpdateText("Version %1", "Версия %1").arg(status.current);
+		}
+		return UpdateText("Build %1", "Сборка %1").arg(
+			status.commit.left(7));
 	case UpdateState::Checking:
 		return UpdateText("Checking…", "Проверка…");
-	case UpdateState::Latest:
-		return UpdateText("Up to date", "Последняя версия");
 	case UpdateState::Downloading: {
 		const auto percent = (status.total > 0)
 			? int(status.received * 100 / status.total)
@@ -715,8 +799,8 @@ QString UpdateStatusText(const UpdateStatus &status) {
 	}
 	case UpdateState::Ready:
 		return UpdateText(
-			"Build %1 is ready",
-			"Сборка %1 готова").arg(status.available);
+			"Version %1 is ready",
+			"Версия %1 готова").arg(status.available);
 	case UpdateState::Failed:
 		return UpdateText("Error", "Ошибка");
 	}

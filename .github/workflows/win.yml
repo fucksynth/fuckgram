@@ -11,8 +11,7 @@ name: Windows
 
 on:
   push:
-    # Branches only: tags (the releases below make "build-N" ones) do not
-    # build anything.
+    # Branches only: tags (made with releases) do not build anything.
     branches: ['**']
     paths-ignore:
       - 'docs/**'
@@ -249,16 +248,17 @@ jobs:
             fi
           done < ../changed.txt
 
-      # The updater of the client compares this number with the newest
-      # release (Telegram/SourceFiles/fuckgram/fuckgram_updater.cpp). The
-      # header is written after the time fix above: only the updater is
-      # compiled again.
-      - name: Number the release build.
+      # The updater of the client compares its commit and time with the
+      # newest release (Telegram/SourceFiles/fuckgram/fuckgram_updater.cpp).
+      # The header is written after the time fix above: only the updater is
+      # compiled again. Builds without them do not update themselves.
+      - name: Stamp the release build.
         if: env.BUILD_TYPE == 'Release' && github.ref == 'refs/heads/release'
         shell: bash
         run: |
           cd "$TBUILD/$REPO_NAME"
-          printf '#pragma once\n\n// Written by CI.\n#define FUCKGRAM_BUILD %s\n' "$GITHUB_RUN_NUMBER" \
+          printf '#pragma once\n\n// Written by CI.\n#define FUCKGRAM_COMMIT "%s"\n#define FUCKGRAM_COMMIT_TIME %s\n' \
+            "$(git rev-parse HEAD)" "$(git log -1 --format=%ct HEAD)" \
             > Telegram/SourceFiles/fuckgram/fuckgram_build.h
           cat Telegram/SourceFiles/fuckgram/fuckgram_build.h
 
@@ -327,63 +327,3 @@ jobs:
           name: fuckgram-win-x64-${{ env.BUILD_TYPE }}-${{ github.sha }}
           path: artifact\
           retention-days: 2
-
-  # Every Release build of the "release" branch becomes a GitHub release
-  # "build-N": the program in fuckgram-win-x64.zip and update.json with
-  # its size and SHA-256. The client updates itself from the newest one.
-  # A job of its own: only it may write to the repository.
-  publish:
-    name: Publish the update
-    needs: windows
-    if: github.ref == 'refs/heads/release' && (github.event_name == 'push' || inputs.build_type == 'Release')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/download-artifact@v8
-        name: Download the build.
-        with:
-          name: fuckgram-win-x64-Release-${{ github.sha }}
-          path: artifact
-
-      - name: Publish.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NOTES: ${{ github.event.head_commit.message }}
-        run: |
-          set -euo pipefail
-          BUILD="$GITHUB_RUN_NUMBER"
-          # A run started again has the same number: it is published already.
-          if gh release view "build-$BUILD" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            echo "build-$BUILD is published already."
-            exit 0
-          fi
-          EXE="$(cd artifact && ls *.exe | grep -iv '^updater' | head -n 1)"
-          test -n "$EXE"
-          (cd artifact && zip -9 -X ../fuckgram-win-x64.zip "$EXE")
-          SIZE="$(stat -c %s fuckgram-win-x64.zip)"
-          SHA="$(sha256sum fuckgram-win-x64.zip | cut -d ' ' -f 1)"
-          printf '{\n  "build": %s,\n  "file": "fuckgram-win-x64.zip",\n  "size": %s,\n  "sha256": "%s",\n  "commit": "%s"\n}\n' \
-            "$BUILD" "$SIZE" "$SHA" "$GITHUB_SHA" > update.json
-          cat update.json
-          printf '%s\n' "${NOTES:-Build $BUILD}" > notes.txt
-          gh release create "build-$BUILD" fuckgram-win-x64.zip update.json \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "fuckgram build $BUILD" \
-            --notes-file notes.txt \
-            --latest
-
-      # The newest ten builds stay.
-      - name: Remove old releases.
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-            --json tagName --jq '.[].tagName' \
-            | grep '^build-' | sort -t - -k 2 -n -r | tail -n +11 \
-            | while read -r tag; do
-                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-              done
