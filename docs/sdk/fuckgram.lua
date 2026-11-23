@@ -428,6 +428,10 @@ function Canvas:polygon(points, color) end
 ---@field corner? "top-left"|"top-right"|"bottom-left"|"bottom-right"
 ---@field paint fun(c: Canvas)
 ---@field on_click? fun(x: integer, y: integer) without it clicks go through
+---@field draggable? boolean the user carries it with the mouse; a press without moving is a click
+---@field on_drag_start? fun(x: integer, y: integer) its top-left in the window
+---@field on_drag? fun(x: integer, y: integer) on every move while carried
+---@field on_drop? fun(x: integer, y: integer) where it stays; move{} works again
 
 ---@class Overlay
 ---@field id integer

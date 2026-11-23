@@ -15,6 +15,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainterPath>
 #include <QtGui/QPolygonF>
+#include <QtWidgets/QApplication>
 
 // Lua is built as C++ (see cmake/lib_lua.cmake): no extern "C" here.
 #include "lua.h"
@@ -349,8 +350,14 @@ public:
 	Overlay(not_null<Ui::RpWidget*> parent, OverlayDescriptor &&descriptor)
 	: RpWidget(parent)
 	, _paint(std::move(descriptor.paint))
-	, _click(std::move(descriptor.click)) {
-		if (descriptor.clickThrough || !_click) {
+	, _click(std::move(descriptor.click))
+	, _drag(descriptor.draggable
+		? std::move(descriptor.drag)
+		: Fn<void(OverlayDrag, QPoint)>())
+	, _draggable(descriptor.draggable) {
+		if (_draggable) {
+			setCursor(Qt::OpenHandCursor);
+		} else if (descriptor.clickThrough || !_click) {
 			setAttribute(Qt::WA_TransparentForMouseEvents);
 		} else {
 			setCursor(style::cur_pointer);
@@ -363,9 +370,17 @@ public:
 	}
 
 	void setPosition(QRect geometry, Qt::Corner corner) {
+		if (_dragging) {
+			// The cursor holds it: the plugin's moves wait for the drop.
+			return;
+		}
 		_geometry = geometry;
 		_corner = corner;
 		place();
+	}
+
+	[[nodiscard]] bool dragging() const {
+		return _dragging;
 	}
 
 protected:
@@ -381,12 +396,50 @@ protected:
 
 	void mousePressEvent(QMouseEvent *e) override {
 		_pressed = (e->button() == Qt::LeftButton);
+		_pressGlobal = e->globalPos();
+		_pressTopLeft = pos();
+	}
+
+	void mouseMoveEvent(QMouseEvent *e) override {
+		if (!_pressed || !_draggable) {
+			return;
+		}
+		const auto delta = e->globalPos() - _pressGlobal;
+		if (!_dragging) {
+			if (delta.manhattanLength() < QApplication::startDragDistance()) {
+				return;
+			}
+			_dragging = true;
+			setCursor(Qt::ClosedHandCursor);
+			raise();
+			notifyDrag(OverlayDrag::Start);
+		}
+		const auto parent = parentWidget();
+		auto target = _pressTopLeft + delta;
+		if (parent) {
+			target.setX(std::clamp(
+				target.x(),
+				0,
+				std::max(parent->width() - width(), 0)));
+			target.setY(std::clamp(
+				target.y(),
+				0,
+				std::max(parent->height() - height(), 0)));
+		}
+		if (target != pos()) {
+			move(target);
+			notifyDrag(OverlayDrag::Move);
+		}
 	}
 
 	void mouseReleaseEvent(QMouseEvent *e) override {
-		if (std::exchange(_pressed, false)
-			&& rect().contains(e->pos())
-			&& _click) {
+		if (!std::exchange(_pressed, false)) {
+			return;
+		} else if (std::exchange(_dragging, false)) {
+			setCursor(Qt::OpenHandCursor);
+			notifyDrag(OverlayDrag::Drop);
+			return;
+		} else if (rect().contains(e->pos()) && _click) {
 			const auto scale = Scale();
 			_click(QPoint(
 				int(std::round(e->pos().x() / scale)),
@@ -395,6 +448,20 @@ protected:
 	}
 
 private:
+	// The overlay is where the cursor put it: it is kept relative to the
+	// top-left corner from now on, in unscaled pixels.
+	void notifyDrag(OverlayDrag kind) {
+		const auto scale = Scale();
+		const auto unscaled = QPoint(
+			int(std::round(x() / scale)),
+			int(std::round(y() / scale)));
+		_geometry.moveTo(unscaled);
+		_corner = Qt::TopLeftCorner;
+		if (_drag) {
+			_drag(kind, unscaled);
+		}
+	}
+
 	void place() {
 		const auto parent = parentWidget();
 		if (!parent) {
@@ -423,9 +490,14 @@ private:
 
 	Fn<void(QPainter&, QSize)> _paint;
 	Fn<void(QPoint)> _click;
+	Fn<void(OverlayDrag, QPoint)> _drag;
 	QRect _geometry;
 	Qt::Corner _corner = Qt::TopLeftCorner;
+	QPoint _pressGlobal;
+	QPoint _pressTopLeft;
+	bool _draggable = false;
 	bool _pressed = false;
+	bool _dragging = false;
 
 };
 
@@ -693,6 +765,11 @@ void MoveOverlay(
 	if (const auto raw = dynamic_cast<Overlay*>(overlay.get())) {
 		raw->setPosition(geometry, corner);
 	}
+}
+
+bool OverlayDragging(not_null<Ui::RpWidget*> overlay) {
+	const auto widget = dynamic_cast<Overlay*>(overlay.get());
+	return widget && widget->dragging();
 }
 
 } // namespace Plugins::Flua

@@ -241,6 +241,25 @@ widget over the window, `corner` is `top-left` (default), `top-right`,
 `on_click` clicks go through it. It returns `{ id, update(), move{...},
 close() }`: call `o:update()` when what it shows changes.
 
+With `draggable = true` the user carries the overlay with the mouse: once
+a press moves past the drag distance the client moves it after the cursor
+by itself (smoothly, without calls per frame), and a press that does not
+move is still a click. `on_drag_start(x, y)`, `on_drag(x, y)` on every move
+and `on_drop(x, y)` get its top-left in the window; `o:move{...}` waits
+until the drop, and a dropped overlay counts `x`, `y` from the top-left
+corner. Older clients ignore these fields: the overlay just stays put.
+
+```lua
+local cat = tg.ui.overlay{
+    x = 100, y = 100, width = 64, height = 64,
+    paint = paint_cat,
+    on_click = pet,
+    draggable = true,
+    on_drag_start = function() carried = true end,
+    on_drop = function(x, y) carried = false; home = { x = x, y = y } end,
+}
+```
+
 `paint(c)` gets a canvas — for overlays and `custom` rows — that works only
 inside that call. Sizes are pixels at 100 % interface scale, the client
 scales them.

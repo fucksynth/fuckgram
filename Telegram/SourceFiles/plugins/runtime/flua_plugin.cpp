@@ -3450,7 +3450,8 @@ namespace {
 
 } // namespace
 
-// tg.ui.overlay{ x, y, width, height, corner, paint, on_click }
+// tg.ui.overlay{ x, y, width, height, corner, paint, on_click, draggable,
+//   on_drag_start(x, y), on_drag(x, y), on_drop(x, y) }
 // -> { id, update(), move{ x, y, width, height, corner }, close() }
 int Plugin::ApiOverlay(lua_State *L) {
 	const auto plugin = From(L);
@@ -3470,10 +3471,19 @@ int Plugin::ApiOverlay(lua_State *L) {
 	lua_getfield(L, 1, "paint");
 	luaL_checktype(L, -1, LUA_TFUNCTION);
 	const auto paint = luaL_ref(L, LUA_REGISTRYINDEX);
-	lua_getfield(L, 1, "on_click");
-	const auto click = lua_isfunction(L, -1)
-		? luaL_ref(L, LUA_REGISTRYINDEX)
-		: (lua_pop(L, 1), kNoRef);
+	const auto callback = [&](const char *name) {
+		lua_getfield(L, 1, name);
+		return lua_isfunction(L, -1)
+			? luaL_ref(L, LUA_REGISTRYINDEX)
+			: (lua_pop(L, 1), kNoRef);
+	};
+	const auto click = callback("on_click");
+	lua_getfield(L, 1, "draggable");
+	const auto draggable = lua_toboolean(L, -1) != 0;
+	lua_pop(L, 1);
+	const auto dragStart = draggable ? callback("on_drag_start") : kNoRef;
+	const auto drag = draggable ? callback("on_drag") : kNoRef;
+	const auto drop = draggable ? callback("on_drop") : kNoRef;
 
 	const auto id = ++plugin->_nextOverlayId;
 	const auto weak = base::make_weak(plugin);
@@ -3482,10 +3492,14 @@ int Plugin::ApiOverlay(lua_State *L) {
 	state.corner = corner;
 	state.paint = paint;
 	state.click = click;
+	state.dragStart = dragStart;
+	state.drag = drag;
+	state.drop = drop;
 	state.widget = CreateOverlay(body, {
 		.geometry = geometry,
 		.corner = corner,
 		.clickThrough = (click == kNoRef),
+		.draggable = draggable,
 		.paint = [=](QPainter &p, QSize size) {
 			if (const auto strong = weak.get()) {
 				strong->paintOverlay(id, p, size);
@@ -3494,6 +3508,11 @@ int Plugin::ApiOverlay(lua_State *L) {
 		.click = [=](QPoint point) {
 			if (const auto strong = weak.get()) {
 				strong->clickOverlay(id, point);
+			}
+		},
+		.drag = [=](OverlayDrag kind, QPoint point) {
+			if (const auto strong = weak.get()) {
+				strong->dragOverlay(id, kind, point);
 			}
 		},
 	});
@@ -3529,6 +3548,10 @@ int Plugin::OverlayMove(lua_State *L) {
 		return 0;
 	}
 	auto &state = i->second;
+	if (state.widget && OverlayDragging(state.widget.get())) {
+		// The cursor holds it until the drop.
+		return 0;
+	}
 	state.geometry = ReadGeometry(L, index, state.geometry);
 	state.corner = ReadCorner(L, index, state.corner);
 	if (state.widget) {
@@ -3548,8 +3571,16 @@ void Plugin::closeOverlay(int id) {
 		return;
 	}
 	if (_lua) {
-		luaL_unref(_lua, LUA_REGISTRYINDEX, i->second.paint);
-		luaL_unref(_lua, LUA_REGISTRYINDEX, i->second.click);
+		for (const auto ref : {
+				i->second.paint,
+				i->second.click,
+				i->second.dragStart,
+				i->second.drag,
+				i->second.drop }) {
+			if (ref != kNoRef) {
+				luaL_unref(_lua, LUA_REGISTRYINDEX, ref);
+			}
+		}
 	}
 	// Not right now: it may be closed from its own click.
 	if (const auto widget = i->second.widget.release()) {
@@ -3572,6 +3603,29 @@ void Plugin::clickOverlay(int id, QPoint point) {
 		return;
 	}
 	lua_rawgeti(_lua, LUA_REGISTRYINDEX, i->second.click);
+	lua_pushinteger(_lua, point.x());
+	lua_pushinteger(_lua, point.y());
+	call(2, 0, kClickBudget);
+}
+
+// The overlay moved with the cursor: `point` is its top-left in the window.
+void Plugin::dragOverlay(int id, OverlayDrag kind, QPoint point) {
+	const auto i = _overlays.find(id);
+	if (!_lua || i == end(_overlays)) {
+		return;
+	}
+	auto &state = i->second;
+	state.geometry.moveTo(point);
+	state.corner = Qt::TopLeftCorner;
+	const auto ref = (kind == OverlayDrag::Start)
+		? state.dragStart
+		: (kind == OverlayDrag::Move)
+		? state.drag
+		: state.drop;
+	if (ref == kNoRef) {
+		return;
+	}
+	lua_rawgeti(_lua, LUA_REGISTRYINDEX, ref);
 	lua_pushinteger(_lua, point.x());
 	lua_pushinteger(_lua, point.y());
 	call(2, 0, kClickBudget);
