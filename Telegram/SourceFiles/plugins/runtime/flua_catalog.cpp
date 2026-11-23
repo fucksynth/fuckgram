@@ -8,6 +8,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 
 #include "apiwrap.h"
 #include "data/data_document.h"
+#include "data/data_document_media.h"
 #include "data/data_file_origin.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
@@ -60,6 +61,34 @@ constexpr auto kParallel = 4;
 	return result;
 }
 
+// What the package in a downloaded file is; nullopt if the file is not
+// there or not whole. Runs off the main thread: nothing here touches the
+// session or the interface.
+[[nodiscard]] std::optional<CatalogPlugin> ReadCatalogFile(
+		const QString &path,
+		int64 size) {
+	const auto info = QFileInfo(path);
+	if (!info.exists() || info.size() != size) {
+		return std::nullopt;
+	}
+	const auto package = ReadPackageFile(path);
+	const auto &manifest = package.manifest;
+	auto result = CatalogPlugin{
+		.id = manifest.id,
+		.name = manifest.name,
+		.version = manifest.version,
+		.author = manifest.author,
+		.description = manifest.description,
+		.permissions = manifest.permissions,
+		.categories = manifest.categories,
+		.error = package.error,
+	};
+	if (result.error.isEmpty()) {
+		result.icon = ReadIcon(package.files, manifest.icon);
+	}
+	return result;
+}
+
 } // namespace
 
 int CatalogSource::validCount() const {
@@ -77,23 +106,8 @@ Catalog::Catalog(not_null<Main::Session*> session)
 
 	_session->data().documentLoadProgress(
 	) | rpl::on_next([=](not_null<DocumentData*> document) {
-		if (document->loading()) {
-			return;
-		}
-		auto finished = std::vector<File>();
-		for (auto i = begin(_downloading); i != end(_downloading);) {
-			if (i->document == document) {
-				finished.push_back(*i);
-				i = _downloading.erase(i);
-			} else {
-				++i;
-			}
-		}
-		for (const auto &file : finished) {
-			fileReady(file);
-		}
-		if (!finished.empty()) {
-			downloadNext();
+		if (!document->loading()) {
+			downloaded(document);
 		}
 	}, _lifetime);
 }
@@ -115,6 +129,11 @@ const CatalogSource *Catalog::source(const QString &username) const {
 		}
 	}
 	return nullptr;
+}
+
+bool Catalog::current(const QString &username, int generation) const {
+	const auto found = source(username);
+	return found && (found->generation == generation);
 }
 
 CatalogSource *Catalog::find(const QString &username) {
@@ -182,13 +201,16 @@ void Catalog::load(const QString &username, bool force) {
 	source->state = CatalogState::Loading;
 	source->error = QString();
 	source->filesTotal = source->filesDone = 0;
+	// Unique across sources: a channel removed and added again while it
+	// loads does not take the answers of its older load.
+	source->generation = ++_generations;
 	_found.erase(source->username);
 	_parsed.erase(source->username);
 	notify();
 	if (source->peer) {
-		requestPage(source->username, 0, 0);
+		requestPage(source->username, source->generation, 0, 0);
 	} else {
-		resolve(source->username);
+		resolve(source->username, source->generation);
 	}
 }
 
@@ -252,10 +274,10 @@ void Catalog::fail(const QString &username, const QString &error) {
 	}
 }
 
-void Catalog::resolve(const QString &username) {
+void Catalog::resolve(const QString &username, int generation) {
 	const auto gotPeer = [=](PeerData *peer) {
 		const auto source = find(username);
-		if (!source) {
+		if (!source || source->generation != generation) {
 			return;
 		} else if (!peer || !peer->isChannel()) {
 			fail(username, Translated("not a channel", "это не канал"));
@@ -264,7 +286,7 @@ void Catalog::resolve(const QString &username) {
 		source->peer = peer;
 		source->title = peer->name();
 		peer->loadUserpic();
-		requestPage(username, 0, 0);
+		requestPage(username, generation, 0, 0);
 	};
 	if (const auto peer = _session->data().peerByUsername(username)) {
 		gotPeer(peer);
@@ -284,7 +306,7 @@ void Catalog::resolve(const QString &username) {
 		_session->data().processChats(data.vchats());
 		gotPeer(_session->data().peerLoaded(peerFromMTP(data.vpeer())));
 	}).fail([=](const MTP::Error &error) {
-		if (weak) {
+		if (weak && current(username, generation)) {
 			fail(username, Translated(
 				"the channel is not found",
 				"канал не найден"));
@@ -294,10 +316,11 @@ void Catalog::resolve(const QString &username) {
 
 void Catalog::requestPage(
 		const QString &username,
+		int generation,
 		MsgId offsetId,
 		int page) {
 	const auto source = find(username);
-	if (!source || !source->peer) {
+	if (!source || !source->peer || source->generation != generation) {
 		return;
 	}
 	const auto peer = source->peer;
@@ -320,7 +343,7 @@ void Catalog::requestPage(
 		MTP_int(0), // min_id
 		MTP_long(0) // hash
 	)).done([=](const MTPmessages_Messages &result) {
-		if (!weak || !find(username)) {
+		if (!weak || !current(username, generation)) {
 			return;
 		}
 		const auto list = result.match([](
@@ -359,6 +382,7 @@ void Catalog::requestPage(
 						.document = file,
 						.msgId = data.vid().v,
 						.date = data.vdate().v,
+						.generation = generation,
 					});
 				}, [](const auto &) {});
 			}, [&](const auto &data) {
@@ -366,12 +390,12 @@ void Catalog::requestPage(
 			});
 		}
 		if (list.size() >= kPerPage && page + 1 < kMaxPages && last) {
-			requestPage(username, last, page + 1);
+			requestPage(username, generation, last, page + 1);
 		} else {
 			startFiles(username);
 		}
 	}).fail([=](const MTP::Error &error) {
-		if (weak) {
+		if (weak && current(username, generation)) {
 			fail(username, Translated(
 				"could not read the channel: ",
 				"не удалось прочитать канал: ") + error.type());
@@ -401,9 +425,8 @@ void Catalog::startFiles(const QString &username) {
 			+ u".flua"_q;
 		const auto info = QFileInfo(file.path);
 		if (info.exists() && info.size() == file.document->size) {
-			fileReady(file);
+			parse(file);
 		} else {
-			QFile::remove(file.path);
 			_queue.push_back(file);
 		}
 	}
@@ -415,58 +438,150 @@ void Catalog::downloadNext() {
 		auto file = _queue.front();
 		_queue.pop_front();
 		const auto source = find(file.username);
-		if (!source || !source->peer) {
+		if (!source
+			|| !source->peer
+			|| source->generation != file.generation) {
 			continue;
 		}
+		// The same document in two posts or channels: one download.
+		const auto joined = ranges::contains(
+			_downloading,
+			file.document,
+			&File::document);
 		_downloading.push_back(file);
+		if (joined) {
+			continue;
+		}
+		if (!_media.contains(file.document)) {
+			_media.emplace(file.document, file.document->createMediaView());
+		}
+		// An empty name loads into memory and joins a download that is
+		// already going, instead of cancelling it.
 		file.document->save(
 			Data::FileOriginMessage(source->peer->id, file.msgId),
-			file.path);
+			QString());
 		if (!file.document->loading()) {
-			// Written at once from the media cache, or did not start.
-			const auto i = ranges::find(
-				_downloading,
-				file.document,
-				&File::document);
-			if (i != end(_downloading)) {
-				_downloading.erase(i);
-				fileReady(file);
-			}
+			// It was loaded already, or did not start.
+			downloaded(file.document);
 		}
 	}
 }
 
-void Catalog::fileReady(const File &file) {
-	if (!find(file.username)) {
-		return;
-	}
-	auto plugin = CatalogPlugin{
-		.fileName = file.document->filename(),
-		.path = file.path,
-		.msgId = file.msgId,
-		.date = file.date,
-	};
-	const auto info = QFileInfo(file.path);
-	if (!info.exists() || info.size() <= 0) {
-		plugin.error = Translated(
-			"could not download the file",
-			"не удалось скачать файл");
-	} else {
-		const auto package = ReadPackageFile(file.path);
-		const auto &manifest = package.manifest;
-		plugin.id = manifest.id;
-		plugin.name = manifest.name;
-		plugin.version = manifest.version;
-		plugin.author = manifest.author;
-		plugin.description = manifest.description;
-		plugin.permissions = manifest.permissions;
-		plugin.categories = manifest.categories;
-		plugin.error = package.error;
-		if (plugin.error.isEmpty()) {
-			plugin.icon = ReadIcon(package.files, manifest.icon);
+void Catalog::downloaded(not_null<DocumentData*> document) {
+	auto finished = std::vector<File>();
+	for (auto i = begin(_downloading); i != end(_downloading);) {
+		if (i->document == document) {
+			finished.push_back(*i);
+			i = _downloading.erase(i);
+		} else {
+			++i;
 		}
 	}
-	_parsed[file.username].push_back(std::move(plugin));
+	if (finished.empty()) {
+		return;
+	}
+	const auto media = _media.take(document);
+	auto bytes = (media && *media) ? (*media)->bytes() : QByteArray();
+	if (bytes.size() != document->size) {
+		// Downloaded to a file before, in a chat.
+		const auto &location = document->location(true);
+		if (!location.isEmpty() && location.accessEnable()) {
+			auto file = QFile(location.name());
+			if (file.open(QIODevice::ReadOnly)) {
+				bytes = file.readAll();
+			}
+			location.accessDisable();
+		}
+	}
+	if (bytes.size() == document->size) {
+		// Whole or nothing: a half-written file is never read.
+		const auto path = finished.front().path;
+		const auto part = path + u".part"_q;
+		auto file = QFile(part);
+		if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+			&& file.write(bytes) == bytes.size()) {
+			file.close();
+			QFile::remove(path);
+			QFile::rename(part, path);
+		} else {
+			file.close();
+			QFile::remove(part);
+		}
+	} else if (document->status != FileDownloadFailed) {
+		// Cancelled, e.g. by a download of the same file in a chat: the
+		// file is asked for once more.
+		auto again = std::vector<File>();
+		for (auto i = begin(finished); i != end(finished);) {
+			if (i->attempts < 1) {
+				++i->attempts;
+				again.push_back(*i);
+				i = finished.erase(i);
+			} else {
+				++i;
+			}
+		}
+		for (const auto &file : again) {
+			_queue.push_front(file);
+		}
+	}
+	for (const auto &file : finished) {
+		parse(file);
+	}
+	downloadNext();
+}
+
+void Catalog::parse(const File &file) {
+	if (!current(file.username, file.generation)) {
+		return;
+	}
+	_parseQueue.push_back(file);
+	parseNext();
+}
+
+void Catalog::parseNext() {
+	// One package at a time, off the main thread: hundreds of cached files
+	// must not freeze the window.
+	if (_parsing) {
+		return;
+	}
+	while (!_parseQueue.empty()) {
+		const auto file = _parseQueue.front();
+		_parseQueue.pop_front();
+		if (!current(file.username, file.generation)) {
+			continue;
+		}
+		_parsing = true;
+		const auto weak = base::make_weak(this);
+		const auto path = file.path;
+		const auto size = int64(file.document->size);
+		crl::async([=] {
+			auto result = ReadCatalogFile(path, size);
+			crl::on_main(weak, [=, result = std::move(result)]() mutable {
+				_parsing = false;
+				parsed(file, std::move(result));
+				parseNext();
+			});
+		});
+		return;
+	}
+}
+
+void Catalog::parsed(const File &file, std::optional<CatalogPlugin> plugin) {
+	if (!current(file.username, file.generation)) {
+		return;
+	}
+	auto result = plugin
+		? std::move(*plugin)
+		: CatalogPlugin{
+			.error = Translated(
+				"could not download the file",
+				"не удалось скачать файл"),
+		};
+	result.fileName = file.document->filename();
+	result.path = file.path;
+	result.msgId = file.msgId;
+	result.date = file.date;
+	_parsed[file.username].push_back(std::move(result));
 	fileDone(file.username);
 }
 
@@ -495,19 +610,27 @@ void Catalog::finish(const QString &username) {
 	});
 	auto result = std::vector<CatalogPlugin>();
 	auto broken = std::vector<CatalogPlugin>();
-	auto seen = base::flat_set<QString>();
+	auto kept = base::flat_map<QString, MsgId>(); // id -> its shown post
 	for (auto &plugin : list) {
 		if (!plugin.error.isEmpty()) {
 			broken.push_back(std::move(plugin));
-		} else if (seen.emplace(plugin.id).second) {
+		} else if (!kept.contains(plugin.id)) {
+			kept.emplace(plugin.id, plugin.msgId);
 			result.push_back(std::move(plugin));
 		}
 	}
+	auto brokenShown = base::flat_set<QString>();
 	for (auto &plugin : broken) {
-		// An older broken post of a plugin that has a good one is noise.
-		if (plugin.id.isEmpty() || seen.emplace(plugin.id).second) {
-			result.push_back(std::move(plugin));
+		if (!plugin.id.isEmpty()) {
+			// An older broken post of a plugin that has a good one is
+			// noise; a newer one is what the author tries to release.
+			const auto i = kept.find(plugin.id);
+			if ((i != end(kept) && plugin.msgId < i->second)
+				|| !brokenShown.emplace(plugin.id).second) {
+				continue;
+			}
 		}
+		result.push_back(std::move(plugin));
 	}
 	source->plugins = std::move(result);
 	source->state = CatalogState::Ready;

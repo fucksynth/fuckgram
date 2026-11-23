@@ -174,8 +174,8 @@ def svg(colors=None):
         '</defs>\n'
         '<circle cx="50" cy="50" r="%g" fill="url(#bg)"/>\n'
         '<g fill="url(#glyph)">%s</g>\n'
-        '</svg>\n') % (bx1, by1, bx2, by2, stops(BACKGROUND),
-                       gx1, gy1, gx2, gy2, stops(GLYPH), CIRCLE_R, bars)
+        '</svg>\n') % (bx1, by1, bx2, by2, stops(background),
+                       gx1, gy1, gx2, gy2, stops(glyph_spec), CIRCLE_R, bars)
 
 
 def main():

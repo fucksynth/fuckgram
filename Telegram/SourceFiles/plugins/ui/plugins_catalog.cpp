@@ -31,6 +31,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "window/window_session_controller_link_info.h"
 #include "styles/style_ayu_icons.h"
 #include "styles/style_boxes.h"
+#include "styles/style_dialogs.h"
 #include "styles/style_layers.h"
 #include "styles/style_menu_icons.h"
 #include "styles/style_plugins.h"
@@ -1037,12 +1038,32 @@ void PluginsCatalogSourceSection::rebuild() {
 		}
 	});
 	_list->clear();
-	_builtKey = stateKey();
 
 	const auto controller = this->controller();
 	const auto catalog = _catalog;
 	const auto username = _username;
 	const auto source = _catalog->source(_username);
+
+	// The categories the channel has; a chosen one that is gone is reset
+	// before the state is remembered, or the next change builds again.
+	auto categories = std::vector<QString>();
+	if (source && source->state == CatalogState::Ready) {
+		for (const auto &category : Plugins::Flua::KnownCategories()) {
+			const auto used = ranges::any_of(source->plugins, [&](
+					const CatalogPlugin &plugin) {
+				return plugin.error.isEmpty()
+					&& ranges::contains(plugin.categories, category);
+			});
+			if (used) {
+				categories.push_back(category);
+			}
+		}
+		if (!ranges::contains(categories, _category)) {
+			_category = QString();
+		}
+	}
+	_builtKey = stateKey();
+
 	if (!source) {
 		Ui::AddDividerText(
 			_list,
@@ -1089,20 +1110,6 @@ void PluginsCatalogSourceSection::rebuild() {
 		}
 	}
 
-	auto categories = std::vector<QString>();
-	for (const auto &category : Plugins::Flua::KnownCategories()) {
-		const auto used = ranges::any_of(source->plugins, [&](
-				const CatalogPlugin &plugin) {
-			return plugin.error.isEmpty()
-				&& ranges::contains(plugin.categories, category);
-		});
-		if (used) {
-			categories.push_back(category);
-		}
-	}
-	if (!ranges::contains(categories, _category)) {
-		_category = QString();
-	}
 	if (!categories.empty()) {
 		const auto weak = base::make_weak(this);
 		_list->add(
@@ -1129,7 +1136,7 @@ void PluginsCatalogSourceSection::rebuild() {
 			&& !plugin.name.toLower().contains(query)
 			&& !plugin.description.toLower().contains(query)
 			&& !plugin.author.toLower().contains(query)
-			&& !plugin.id.contains(query)
+			&& !plugin.id.contains(query, Qt::CaseInsensitive)
 			&& !plugin.fileName.toLower().contains(query)) {
 			continue;
 		} else if (!plugin.error.isEmpty()) {

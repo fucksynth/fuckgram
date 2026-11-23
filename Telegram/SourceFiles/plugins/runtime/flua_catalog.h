@@ -11,6 +11,10 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 class PeerData;
 class DocumentData;
 
+namespace Data {
+class DocumentMedia;
+} // namespace Data
+
 namespace Main {
 class Session;
 } // namespace Main
@@ -57,6 +61,8 @@ struct CatalogSource {
 	// One per plugin id (the newest post), newest first; then the files
 	// that do not pass the checks.
 	std::vector<CatalogPlugin> plugins;
+	// Grows with every load: answers of an older load are dropped.
+	int generation = 0;
 
 	[[nodiscard]] int validCount() const;
 };
@@ -87,18 +93,28 @@ private:
 		MsgId msgId = 0;
 		TimeId date = 0;
 		QString path;
+		int generation = 0;
+		int attempts = 0;
 	};
 
 	[[nodiscard]] CatalogSource *find(const QString &username);
+	[[nodiscard]] bool current(const QString &username, int generation) const;
 	void notify();
 	void loadCustom();
 	void saveCustom() const;
-	void resolve(const QString &username);
-	void requestPage(const QString &username, MsgId offsetId, int page);
+	void resolve(const QString &username, int generation);
+	void requestPage(
+		const QString &username,
+		int generation,
+		MsgId offsetId,
+		int page);
 	void fail(const QString &username, const QString &error);
 	void startFiles(const QString &username);
 	void downloadNext();
-	void fileReady(const File &file);
+	void downloaded(not_null<DocumentData*> document);
+	void parse(const File &file);
+	void parseNext();
+	void parsed(const File &file, std::optional<CatalogPlugin> plugin);
 	void fileDone(const QString &username);
 	void finish(const QString &username);
 
@@ -108,6 +124,14 @@ private:
 	std::map<QString, std::vector<CatalogPlugin>> _parsed;
 	std::deque<File> _queue;
 	std::vector<File> _downloading;
+	// Downloads go to memory: the media view keeps the bytes, and a file
+	// the user downloads in a chat is not touched.
+	base::flat_map<
+		not_null<DocumentData*>,
+		std::shared_ptr<Data::DocumentMedia>> _media;
+	std::deque<File> _parseQueue;
+	bool _parsing = false;
+	int _generations = 0;
 	rpl::event_stream<> _changes;
 	bool _changeQueued = false;
 	rpl::lifetime _lifetime;
