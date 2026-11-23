@@ -302,6 +302,8 @@ void Host::start() {
 	loadEngine();
 	QDir().mkpath(PluginsDataPath());
 	const auto crashed = QFile::exists(StartingMarkPath());
+	// A mark of an earlier start must not count again later.
+	QFile::remove(StartingMarkPath());
 	if (crashed && mayRun()) {
 		LOG(("Plugins: the last start did not finish, safe mode is on"));
 		_engine.safeMode = true;
