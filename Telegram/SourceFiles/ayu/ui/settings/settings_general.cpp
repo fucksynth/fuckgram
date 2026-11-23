@@ -15,6 +15,7 @@
 #include "core/application.h"
 #include "lang/lang_text_entity.h"
 #include "platform/platform_translate_provider.h"
+#include "plugins/runtime/flua_runtime.h"
 #include "settings/settings_builder.h"
 #include "settings/settings_common.h"
 #include "styles/style_menu_icons.h"
@@ -34,7 +35,9 @@ using namespace AyuBuilder;
 namespace {
 
 void BuildTranslator(SectionBuilder &builder, AyuSectionBuilder &ayu) {
-	builder.addSubsectionTitle(tr::lng_translate_settings_subtitle());
+	builder.addSubsectionTitle(rpl::single(Plugins::Flua::Translated(
+		"Translate Messages",
+		"Перевод сообщений")));
 
 	auto *settings = &AyuSettings::getInstance();
 
