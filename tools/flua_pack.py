@@ -68,9 +68,13 @@ def check_manifest(root, files):
         fail("bad id, use 2-64 of a-z 0-9 _ . -")
     if not manifest.get("name"):
         fail("name is missing")
+    names = {relative for relative, _ in files}
     entry = manifest.get("entry", "init.lua")
-    if entry not in {relative for relative, _ in files}:
+    if entry not in names:
         fail("entry file is missing: " + entry)
+    icon = manifest.get("icon", "")
+    if icon and icon not in names:
+        fail("icon file is missing: " + icon)
     api = manifest.get("api", {})
     low, high = api.get("min", 1), api.get("max", api.get("min", 1))
     if low > API_VERSION or high < API_VERSION:
