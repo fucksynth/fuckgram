@@ -244,6 +244,26 @@ jobs:
             fi
           done < ../changed.txt
 
+      # 16 GB of RAM is not enough for four Release compilers on the
+      # biggest files ("C1060: compiler is out of heap space"): the page
+      # file grows up to 32 GB when needed. Never fails the build.
+      - name: Free space for the page file.
+        continue-on-error: true
+        shell: pwsh
+        run: Get-PSDrive C, D -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('{0}: {1:N1} GB free' -f $_.Name, ($_.Free / 1GB)) }
+
+      # Pinned to a commit: third-party action in a repo with secrets.
+      - uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc
+        name: Bigger page file.
+        continue-on-error: true
+        with:
+          minimum-size: 8GB
+          maximum-size: 32GB
+          disk-root: 'D:'
+
+      # A Release build that still runs out of memory goes on with two
+      # compilers (_CL_ is added after the project's /MP): what compiled
+      # already is not compiled again.
       - name: Build.
         id: build
         run: |
@@ -257,6 +277,11 @@ jobs:
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON
 
           cmake --build ..\out --config %BUILD_TYPE% --parallel
+          if errorlevel 1 if "%BUILD_TYPE%"=="Release" (
+            echo Building again with two compiler processes.
+            set _CL_=/MP2
+            cmake --build ..\out --config %BUILD_TYPE% --parallel
+          )
 
       # Also after a failed build: what compiled is not compiled again.
       - name: Mark the build.
