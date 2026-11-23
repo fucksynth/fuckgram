@@ -27,6 +27,9 @@ on:
       - 'Telegram/Telegram/**'
       - 'Telegram/configure.sh'
       - 'Telegram/Telegram.plist'
+      # Not part of the client build.
+      - 'examples/**'
+      - 'tools/**'
   workflow_dispatch:
     inputs:
       build_type:

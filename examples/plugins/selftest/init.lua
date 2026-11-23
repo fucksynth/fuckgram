@@ -31,6 +31,7 @@ local help = [[
 /t files — файлы и настройки плагина
 /t json — tg.json туда и обратно
 /t invoke — сырые запросы MTProto и ошибки
+/t secure — важный запрос: клиент должен спросить разрешение
 /t get — последнее входящее в этом чате
 /t compose — плагин вставит текст в поле ввода
 /t refresh — заново применить подмену [fg]
@@ -184,6 +185,21 @@ commands["invoke"] = function()
 				.. #config.dc_options)
 		else
 			tg.toast("Колбэк: ошибка " .. err.type)
+		end
+	end)
+end
+
+-- Reading Telegram Passport data is harmless, but it is on the list of
+-- sensitive requests: the client asks before sending it.
+commands["secure"] = function()
+	tg.async(function()
+		local values, err = tg.invoke{ _ = "account.getAllSecureValues" }
+		if values then
+			show("Важный запрос", "Разрешено. Документов Telegram Passport: "
+				.. #values)
+		else
+			show("Важный запрос", "Ответ: " .. err.type
+				.. "\n(CLIENT_PLUGIN_DENIED — вы нажали «Запретить»)")
 		end
 	end)
 end
