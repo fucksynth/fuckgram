@@ -539,9 +539,15 @@ void Host::confirmSensitive(
 		? Translated(
 			"give your channel or group to another owner",
 			"передать ваш канал или группу другому владельцу")
+		: (method.contains(u"SecureValue"_q)
+			|| method == u"account.getAuthorizationForm"_q
+			|| method == u"account.acceptAuthorization"_q)
+		? Translated(
+			"see or share your Telegram Passport data",
+			"посмотреть или передать данные Telegram Passport")
 		: Translated(
-			"change the sign in, sessions or security of your account",
-			"изменить вход, сеансы или защиту вашего аккаунта");
+			"get to the sign in, sessions or security of your account",
+			"получить доступ ко входу, сеансам или защите аккаунта");
 	const auto text = Translated(
 		"The plugin \"%1\" wants to %2 (%3).\n\n"
 		"Allow it only if you asked the plugin to do this right now.",
