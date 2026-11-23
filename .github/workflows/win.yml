@@ -157,8 +157,10 @@ jobs:
       # breakpad's dump_syms needs ATL, which the runner lacks, and only
       # makes symbols for crash reports, which are off in this build. Done
       # after "First set up", so the cache key still is of the original file.
+      # Also with the libraries from the cache: prepare.py builds a stage
+      # again when its commands differ from the ones it was built with.
       - name: Skip dump_syms in release libraries.
-        if: env.BUILD_TYPE == 'Release' && steps.libs.outputs.cache-hit != 'true'
+        if: env.BUILD_TYPE == 'Release'
         shell: bash
         run: |
           sed -i '/dump_syms/d' "$TBUILD/$REPO_NAME/$PREPARE_PATH"
