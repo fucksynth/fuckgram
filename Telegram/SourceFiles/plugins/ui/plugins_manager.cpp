@@ -533,8 +533,10 @@ void PluginCard::mousePressEvent(QMouseEvent *e) {
 	const auto checked = !_toggle->checked();
 	_toggle->setChecked(checked, anim::type::normal);
 	// The list is built again on the change: let the toggle move first.
+	// Not guarded by the card: it may be built again before that, and the
+	// callback needs only the plugin id.
 	const auto toggle = _callbacks.toggle;
-	base::call_delayed(st::pluginsCardToggle.duration, this, [=] {
+	base::call_delayed(st::pluginsCardToggle.duration, [=] {
 		toggle(checked);
 	});
 }
@@ -834,7 +836,14 @@ void PluginsSection::setupContent() {
 			rpl::single(Translated("Plugins are on", "Плагины включены")),
 			st::settingsButton,
 			{ &st::menuIconBotCommands });
-		master->toggleOn(rpl::single(host->engine().enabled));
+		master->toggleOn(rpl::single(
+			rpl::empty
+		) | rpl::then(
+			host->changes()
+		) | rpl::map([] {
+			const auto host = Flua::CurrentHost();
+			return host && host->engine().enabled;
+		}));
 		master->toggledChanges(
 		) | rpl::on_next([=](bool enabled) {
 			if (const auto host = Flua::CurrentHost()) {
