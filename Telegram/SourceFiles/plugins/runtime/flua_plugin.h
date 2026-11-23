@@ -79,8 +79,13 @@ public:
 
 	[[nodiscard]] const Manifest &manifest() const;
 	[[nodiscard]] const QString &origin() const;
+	[[nodiscard]] const std::map<QString, QByteArray> &files() const;
 	[[nodiscard]] bool running() const;
 	[[nodiscard]] const QString &lastError() const;
+	// The manifest picture, null if there is none or it is not an image.
+	[[nodiscard]] QImage icon() const;
+	// What the plugin logged and its errors, oldest first.
+	[[nodiscard]] const std::deque<QString> &journal() const;
 
 	bool start();
 	void stop();
@@ -262,6 +267,11 @@ private:
 
 	// Handler reference -> the only methods it wants, all if absent.
 	std::map<int, base::flat_set<mtpTypeId>> _methodFilters;
+
+	std::deque<QString> _journal;
+	mutable std::optional<QImage> _icon;
+
+	void addToJournal(const QString &text);
 
 };
 

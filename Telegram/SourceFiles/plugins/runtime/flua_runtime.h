@@ -23,6 +23,51 @@ void Stop();
 [[nodiscard]] QString PluginsPath();
 [[nodiscard]] QString PluginsDataPath();
 
+// The English or the Russian text, by the language of the client.
+[[nodiscard]] QString Translated(const char *english, const char *russian);
+// What a permission lets a plugin do, for the install box.
+[[nodiscard]] QString PermissionText(const QString &permission);
+// Stars, gifts, payments, sign in, sessions, the password, the account:
+// a plugin calls these only after the user allows it.
+[[nodiscard]] bool IsSensitiveMethod(const QString &name);
+
+struct EngineSettings {
+	bool enabled = true;          // plugins run at all
+	bool devMode = true;          // development folders reload themselves
+	bool compact = false;         // short cards in the manager
+	bool unknownSources = true;   // install .flua files sent in chats
+	bool confirmSensitive = true; // see IsSensitiveMethod()
+	bool safeMode = false;        // nothing starts; set after a crash
+
+	friend inline bool operator==(
+		const EngineSettings &,
+		const EngineSettings &) = default;
+};
+
+// A plugin as the manager shows it.
+struct PluginView {
+	QString id;
+	QString name;
+	QString version;
+	QString author;
+	QString description;
+	std::vector<QString> permissions;
+	QString origin;
+	QImage icon;
+	QString error;
+	bool dev = false; // an unpacked development folder
+	bool enabled = false;
+	bool running = false;
+};
+
+struct InvalidView {
+	QString origin;
+	QString error;
+};
+
+class Host;
+[[nodiscard]] Host *CurrentHost();
+
 class Host final : public Sink, public base::has_weak_ptr {
 public:
 	Host();
@@ -34,6 +79,27 @@ public:
 	// A plugin started, stopped or registered something: enable only
 	// the hooks in use.
 	void refreshHooks();
+
+	// For the manager: what is loaded and when that changes.
+	[[nodiscard]] std::vector<PluginView> pluginViews() const;
+	[[nodiscard]] std::vector<InvalidView> invalidViews() const;
+	[[nodiscard]] std::deque<QString> journal(const QString &id) const;
+	[[nodiscard]] rpl::producer<> changes() const;
+	void notifyChanged();
+
+	[[nodiscard]] const EngineSettings &engine() const;
+	void setEngine(const EngineSettings &settings);
+	void setPluginEnabled(const QString &id, bool enabled);
+	// Removes an installed .flua and the data of the plugin.
+	void removePlugin(const QString &id);
+	// A .flua of the plugin to send, packed for a development folder.
+	[[nodiscard]] QString sharePath(const QString &id);
+
+	// Asks the user about a sensitive request of a plugin.
+	void confirmSensitive(
+		const QString &pluginName,
+		const QString &method,
+		Fn<void(bool allowed)> done);
 
 	// tg.invoke calls: the filters of plugins skip them.
 	void ownRequest(mtpRequestId requestId, mtpTypeId method);
@@ -79,11 +145,15 @@ private:
 	};
 
 	void load(const QString &path);
-	void setPluginEnabled(const QString &id, bool enabled);
 	void offerInstall(const QString &path);
-	void install(const QString &path, const QString &id);
+	void install(const QString &path, const QString &id, bool enable);
 	void loadDisabled();
 	void saveDisabled();
+	void loadEngine();
+	void saveEngine();
+	[[nodiscard]] bool mayRun() const;
+	void startAll();
+	void stopAll();
 
 	// Development folders reload themselves when their files change.
 	void watchDevFolders();
@@ -101,6 +171,9 @@ private:
 	base::flat_set<QString> _disabled;
 	base::Timer _devTimer;
 	std::map<QString, QString> _devStamps; // folder -> files and times
+	EngineSettings _engine;
+	rpl::event_stream<> _changes;
+	bool _changeQueued = false;
 
 };
 

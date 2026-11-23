@@ -1,0 +1,98 @@
+/*
+This file is part of fuckgram, a Telegram Desktop client based on AyuGram.
+
+For license and copyright information please follow this link:
+https://github.com/fucksynth/fuckgram/blob/main/LICENSE
+*/
+using "ui/basic.style";
+using "ui/widgets/widgets.style";
+using "ui/layers/layers.style";
+using "info/info.style";
+
+pluginsCardMargin: margins(12px, 5px, 12px, 5px);
+pluginsCardPadding: margins(14px, 12px, 12px, 10px);
+pluginsCardRadius: 12px;
+pluginsCardIconSize: 44px;
+pluginsCardIconRadius: 12px;
+pluginsCardIconSkip: 12px;
+pluginsCardLineSkip: 2px;
+pluginsCardBlockSkip: 8px;
+pluginsCardNameStyle: TextStyle(defaultTextStyle) {
+	font: font(14px semibold);
+}
+pluginsCardMetaStyle: TextStyle(defaultTextStyle) {
+	font: font(12px);
+}
+pluginsCardTextStyle: TextStyle(defaultTextStyle) {
+	font: font(13px);
+}
+pluginsCardBadgeFont: font(11px);
+pluginsCardBadgeHeight: 20px;
+pluginsCardBadgePadding: 8px;
+pluginsCardBadgeSkip: 6px;
+pluginsCardBadgeRadius: 6px;
+pluginsCardToggle: infoProfileToggle;
+pluginsCardActionsTop: 6px;
+
+pluginsCardAction: IconButton(defaultIconButton) {
+	width: 36px;
+	height: 36px;
+	icon: icon {{ "menu/share", windowSubTextFg }};
+	iconOver: icon {{ "menu/share", windowBoldFg }};
+	iconPosition: point(-1px, -1px);
+	rippleAreaPosition: point(2px, 2px);
+	rippleAreaSize: 32px;
+	ripple: defaultRippleAnimationBgOver;
+}
+pluginsActionShare: icon {{ "menu/share", windowSubTextFg }};
+pluginsActionShareOver: icon {{ "menu/share", windowBoldFg }};
+pluginsActionJournal: icon {{ "menu/file", windowSubTextFg }};
+pluginsActionJournalOver: icon {{ "menu/file", windowBoldFg }};
+pluginsActionFolder: icon {{ "menu/show_in_folder", windowSubTextFg }};
+pluginsActionFolderOver: icon {{ "menu/show_in_folder", windowBoldFg }};
+pluginsActionReload: icon {{ "menu/restart_bot", windowSubTextFg }};
+pluginsActionReloadOver: icon {{ "menu/restart_bot", windowBoldFg }};
+pluginsActionDelete: icon {{ "menu/delete", attentionButtonFg }};
+pluginsActionDeleteOver: icon {{ "menu/delete", attentionButtonFgOver }};
+
+pluginsEngineIconPower: icon {{ "menu/power_usage", settingsIconFg }};
+pluginsEngineIconCode: icon {{ "menu/bot_commands", settingsIconFg }};
+pluginsEngineIconCompact: icon {{ "menu/customize", settingsIconFg }};
+pluginsEngineIconSources: icon {{ "menu/download", settingsIconFg }};
+pluginsEngineIconCheck: icon {{ "menu/permissions", settingsIconFg }};
+pluginsEngineIconConfirm: icon {{ "menu/2sv_on", settingsIconFg }};
+pluginsEngineIconSafe: icon {{ "menu/stealth", settingsIconFg }};
+
+pluginsInstallIconSize: 72px;
+pluginsInstallIconRadius: 18px;
+pluginsInstallIconTop: 8px;
+pluginsInstallName: FlatLabel(defaultFlatLabel) {
+	textFg: windowBoldFg;
+	align: align(top);
+	style: TextStyle(defaultTextStyle) {
+		font: font(16px semibold);
+	}
+}
+pluginsInstallMeta: FlatLabel(defaultFlatLabel) {
+	textFg: windowSubTextFg;
+	align: align(top);
+}
+pluginsInstallText: FlatLabel(defaultFlatLabel) {
+	minWidth: 260px;
+}
+pluginsInstallSection: FlatLabel(defaultFlatLabel) {
+	textFg: windowSubTextFg;
+	style: TextStyle(defaultTextStyle) {
+		font: font(12px);
+	}
+}
+pluginsPermissionIconLeft: 0px;
+pluginsPermissionTextLeft: 36px;
+pluginsPermissionSkip: 6px;
+
+pluginsJournalText: FlatLabel(defaultFlatLabel) {
+	minWidth: 360px;
+	style: TextStyle(defaultTextStyle) {
+		font: font(12px);
+	}
+}

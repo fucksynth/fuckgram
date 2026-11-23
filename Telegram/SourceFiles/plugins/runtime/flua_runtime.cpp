@@ -6,6 +6,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 */
 #include "plugins/runtime/flua_runtime.h"
 
+#include "base/call_delayed.h"
 #include "core/application.h"
 #include "data/data_peer.h"
 #include "data/data_session.h"
@@ -17,6 +18,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "plugins/runtime/flua_package.h"
 #include "plugins/runtime/flua_plugin.h"
 #include "plugins/runtime/flua_tl.h"
+#include "plugins/ui/plugins_manager.h"
 #include "settings.h"
 #include "ui/layers/generic_box.h"
 #include "ui/widgets/checkbox.h"
@@ -31,6 +33,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtCore/QUrl>
 #include <QtGui/QDesktopServices>
 
@@ -70,8 +73,9 @@ void Toast(const QString &text) {
 	return Lang::GetInstance().id().startsWith(u"ru"_q);
 }
 
-// What a permission lets a plugin do, for the install box.
-[[nodiscard]] QString PermissionText(const QString &permission) {
+} // namespace
+
+QString PermissionText(const QString &permission) {
 	const auto is = [&](const char *name) {
 		return permission == QString::fromLatin1(name);
 	};
@@ -127,6 +131,8 @@ void Toast(const QString &text) {
 	return permission;
 }
 
+namespace {
+
 // Our keys are not in the cloud language packs.
 void ApplyTranslations() {
 	if (!Russian()) {
@@ -152,27 +158,27 @@ void ApplyTranslations() {
 	set("fg_plugins_dev_folder", "Уже загружена папка разработки с этим id плагина.");
 }
 
-[[nodiscard]] QString Describe(const Manifest &manifest) {
-	auto result = QString(manifest.name + u' ' + manifest.version);
-	if (!manifest.author.isEmpty()) {
-		result += u" · "_q + manifest.author;
-	}
-	if (!manifest.description.isEmpty()) {
-		result += u'\n' + manifest.description;
-	}
-	if (manifest.permissions.empty()) {
-		result += Russian()
-			? QString::fromUtf8("\n\nБез разрешений.")
-			: u"\n\nNo permissions."_q;
-	} else {
-		result += Russian()
-			? QString::fromUtf8("\n\nОн сможет:")
-			: u"\n\nIt will be able to:"_q;
-		for (const auto &permission : manifest.permissions) {
-			result += u"\n• "_q + PermissionText(permission);
-		}
-	}
-	return result;
+// Exists while plugins start: found at the next launch, it means the
+// client crashed then, and the safe mode turns on.
+[[nodiscard]] QString StartingMarkPath() {
+	return PluginsDataPath() + u"starting"_q;
+}
+
+[[nodiscard]] PluginView ViewOf(const Plugin &plugin) {
+	const auto &manifest = plugin.manifest();
+	return {
+		.id = manifest.id,
+		.name = manifest.name,
+		.version = manifest.version,
+		.author = manifest.author,
+		.description = manifest.description,
+		.permissions = manifest.permissions,
+		.origin = plugin.origin(),
+		.icon = plugin.icon(),
+		.error = plugin.lastError(),
+		.dev = QFileInfo(plugin.origin()).isDir(),
+		.running = plugin.running(),
+	};
 }
 
 } // namespace
@@ -183,6 +189,59 @@ QString PluginsPath() {
 
 QString PluginsDataPath() {
 	return cWorkingDir() + u"plugins_data/"_q;
+}
+
+QString Translated(const char *english, const char *russian) {
+	return QString::fromUtf8(Russian() ? russian : english);
+}
+
+bool IsSensitiveMethod(const QString &name) {
+	if (name.startsWith(u"auth."_q)) {
+		return true;
+	} else if (name.startsWith(u"payments."_q)) {
+		// Reading is fine, everything that pays or moves gifts is not.
+		const auto action = name.mid(9);
+		return !action.startsWith(u"get"_q)
+			&& !action.startsWith(u"check"_q)
+			&& !action.startsWith(u"validate"_q)
+			&& !action.startsWith(u"can"_q);
+	}
+	static const auto list = base::flat_set<QString>{
+		u"messages.sendPaidReaction"_q,
+		u"channels.editCreator"_q,
+		u"account.updatePasswordSettings"_q,
+		u"account.getPasswordSettings"_q,
+		u"account.resetPassword"_q,
+		u"account.declinePasswordReset"_q,
+		u"account.confirmPasswordEmail"_q,
+		u"account.resendPasswordEmail"_q,
+		u"account.cancelPasswordEmail"_q,
+		u"account.getTmpPassword"_q,
+		u"account.resetAuthorization"_q,
+		u"account.resetWebAuthorization"_q,
+		u"account.resetWebAuthorizations"_q,
+		u"account.changeAuthorizationSettings"_q,
+		u"account.setAuthorizationTTL"_q,
+		u"account.sendChangePhoneCode"_q,
+		u"account.changePhone"_q,
+		u"account.deleteAccount"_q,
+		u"account.setAccountTTL"_q,
+		u"account.sendVerifyEmailCode"_q,
+		u"account.verifyEmail"_q,
+		u"account.invalidateSignInCodes"_q,
+		u"account.updateDeviceLocked"_q,
+		u"account.getAuthorizationForm"_q,
+		u"account.acceptAuthorization"_q,
+		u"account.getAllSecureValues"_q,
+		u"account.getSecureValue"_q,
+		u"account.saveSecureValue"_q,
+		u"account.deleteSecureValue"_q,
+	};
+	return list.contains(name);
+}
+
+Host *CurrentHost() {
+	return Instance.get();
 }
 
 void Start() {
@@ -240,6 +299,31 @@ Host::~Host() {
 
 void Host::start() {
 	loadDisabled();
+	loadEngine();
+	QDir().mkpath(PluginsDataPath());
+	const auto crashed = QFile::exists(StartingMarkPath());
+	if (crashed && mayRun()) {
+		LOG(("Plugins: the last start did not finish, safe mode is on"));
+		_engine.safeMode = true;
+		saveEngine();
+		base::call_delayed(3000, this, [] {
+			Toast(Translated(
+				"The client closed while plugins were starting. "
+				"Safe mode is on: plugins do not run.",
+				"Клиент закрылся, пока запускались плагины. "
+				"Включён безопасный режим: плагины не работают."));
+		});
+	}
+	if (mayRun()) {
+		auto mark = QFile(StartingMarkPath());
+		if (mark.open(QIODevice::WriteOnly)) {
+			mark.close();
+		}
+		// Plugin code also runs right after the start, on first events.
+		base::call_delayed(10000, this, [] {
+			QFile::remove(StartingMarkPath());
+		});
+	}
 	const auto root = PluginsPath();
 	QDir().mkpath(root);
 	const auto entries = QDir(root).entryInfoList(
@@ -253,11 +337,240 @@ void Host::start() {
 	}
 	SetSink(this);
 	refreshHooks();
-	watchDevFolders();
+	if (_engine.devMode) {
+		watchDevFolders();
+	}
 	LOG(("Plugins: %1 loaded, %2 invalid, from %3"
 		).arg(_plugins.size()
 		).arg(_invalid.size()
 		).arg(root));
+}
+
+bool Host::mayRun() const {
+	return _engine.enabled && !_engine.safeMode;
+}
+
+void Host::startAll() {
+	for (const auto &plugin : _plugins) {
+		if (!_disabled.contains(plugin->manifest().id)) {
+			plugin->start();
+		}
+	}
+	refreshHooks();
+	Plugins::RefreshDisplayText();
+}
+
+void Host::stopAll() {
+	for (const auto &plugin : _plugins) {
+		plugin->stop();
+	}
+	refreshHooks();
+	Plugins::RefreshDisplayText();
+}
+
+void Host::loadEngine() {
+	_engine = EngineSettings();
+	auto file = QFile(PluginsDataPath() + u"engine.json"_q);
+	if (!file.open(QIODevice::ReadOnly)) {
+		return;
+	}
+	const auto json = QJsonDocument::fromJson(file.readAll()).object();
+	const auto read = [&](const char *key, bool &value) {
+		const auto stored = json.value(QString::fromLatin1(key));
+		if (stored.isBool()) {
+			value = stored.toBool();
+		}
+	};
+	read("enabled", _engine.enabled);
+	read("dev_mode", _engine.devMode);
+	read("compact", _engine.compact);
+	read("unknown_sources", _engine.unknownSources);
+	read("confirm_sensitive", _engine.confirmSensitive);
+	read("safe_mode", _engine.safeMode);
+}
+
+void Host::saveEngine() {
+	auto json = QJsonObject();
+	json.insert(u"enabled"_q, _engine.enabled);
+	json.insert(u"dev_mode"_q, _engine.devMode);
+	json.insert(u"compact"_q, _engine.compact);
+	json.insert(u"unknown_sources"_q, _engine.unknownSources);
+	json.insert(u"confirm_sensitive"_q, _engine.confirmSensitive);
+	json.insert(u"safe_mode"_q, _engine.safeMode);
+	QDir().mkpath(PluginsDataPath());
+	auto file = QFile(PluginsDataPath() + u"engine.json"_q);
+	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		file.write(QJsonDocument(json).toJson(QJsonDocument::Indented));
+	}
+}
+
+const EngineSettings &Host::engine() const {
+	return _engine;
+}
+
+void Host::setEngine(const EngineSettings &settings) {
+	if (_engine == settings) {
+		return;
+	}
+	const auto couldRun = mayRun();
+	const auto hadDevMode = _engine.devMode;
+	_engine = settings;
+	saveEngine();
+	if (couldRun != mayRun()) {
+		if (mayRun()) {
+			startAll();
+		} else {
+			stopAll();
+		}
+	}
+	if (hadDevMode != _engine.devMode) {
+		if (_engine.devMode) {
+			watchDevFolders();
+		} else {
+			_devTimer.cancel();
+			_devStamps.clear();
+		}
+	}
+	notifyChanged();
+}
+
+rpl::producer<> Host::changes() const {
+	return _changes.events();
+}
+
+void Host::notifyChanged() {
+	// Many plugins start or stop at once: one update for all of them.
+	if (_changeQueued) {
+		return;
+	}
+	_changeQueued = true;
+	crl::on_main(this, [=] {
+		_changeQueued = false;
+		_changes.fire({});
+	});
+}
+
+std::vector<PluginView> Host::pluginViews() const {
+	auto result = std::vector<PluginView>();
+	result.reserve(_plugins.size());
+	for (const auto &plugin : _plugins) {
+		auto view = ViewOf(*plugin);
+		view.enabled = !_disabled.contains(view.id);
+		result.push_back(std::move(view));
+	}
+	return result;
+}
+
+std::vector<InvalidView> Host::invalidViews() const {
+	auto result = std::vector<InvalidView>();
+	result.reserve(_invalid.size());
+	for (const auto &entry : _invalid) {
+		result.push_back({ .origin = entry.origin, .error = entry.error });
+	}
+	return result;
+}
+
+std::deque<QString> Host::journal(const QString &id) const {
+	for (const auto &plugin : _plugins) {
+		if (plugin->manifest().id == id) {
+			return plugin->journal();
+		}
+	}
+	return {};
+}
+
+void Host::removePlugin(const QString &id) {
+	for (auto i = begin(_plugins); i != end(_plugins); ++i) {
+		if ((*i)->manifest().id != id) {
+			continue;
+		}
+		const auto origin = (*i)->origin();
+		if (QFileInfo(origin).isDir()) {
+			return; // The sources of a developer are not ours to delete.
+		}
+		const auto display = (*i)->handles(Event::Display);
+		(*i)->stop();
+		_plugins.erase(i);
+		QFile::remove(origin);
+		QDir(PluginsDataPath() + id).removeRecursively();
+		_disabled.remove(id);
+		saveDisabled();
+		refreshHooks();
+		if (display) {
+			Plugins::RefreshDisplayText();
+		}
+		notifyChanged();
+		return;
+	}
+}
+
+QString Host::sharePath(const QString &id) {
+	for (const auto &plugin : _plugins) {
+		if (plugin->manifest().id != id) {
+			continue;
+		}
+		const auto origin = plugin->origin();
+		if (!QFileInfo(origin).isDir()) {
+			return origin;
+		}
+		const auto folder = PluginsDataPath() + u"share/"_q;
+		QDir().mkpath(folder);
+		const auto path = folder + id + u".flua"_q;
+		return WritePackageFile(plugin->files(), path) ? path : QString();
+	}
+	return QString();
+}
+
+void Host::confirmSensitive(
+		const QString &pluginName,
+		const QString &method,
+		Fn<void(bool allowed)> done) {
+	const auto controller = ActiveController();
+	if (!controller) {
+		done(false);
+		return;
+	}
+	const auto what = (method.startsWith(u"payments."_q)
+		|| method.startsWith(u"messages.sendPaid"_q))
+		? Translated(
+			"spend Stars, pay or move gifts",
+			"потратить звёзды, заплатить или передать подарки")
+		: method.startsWith(u"channels.editCreator"_q)
+		? Translated(
+			"give your channel or group to another owner",
+			"передать ваш канал или группу другому владельцу")
+		: Translated(
+			"change the sign in, sessions or security of your account",
+			"изменить вход, сеансы или защиту вашего аккаунта");
+	const auto text = Translated(
+		"The plugin \"%1\" wants to %2 (%3).\n\n"
+		"Allow it only if you asked the plugin to do this right now.",
+		"Плагин «%1» хочет %2 (%3).\n\n"
+		"Разрешайте, только если сами только что попросили "
+		"плагин об этом.").arg(pluginName, what, method);
+	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
+		const auto answered = std::make_shared<bool>(false);
+		const auto answer = [=](bool allowed) {
+			if (!*answered) {
+				*answered = true;
+				done(allowed);
+			}
+		};
+		box->setTitle(rpl::single(Translated(
+			"Sensitive action",
+			"Важное действие")));
+		box->addRow(object_ptr<Ui::FlatLabel>(box, text, st::boxLabel));
+		box->addButton(rpl::single(Translated("Allow", "Разрешить")), [=] {
+			answer(true);
+			box->closeBox();
+		}, st::attentionBoxButton);
+		box->addButton(rpl::single(Translated("Deny", "Запретить")), [=] {
+			box->closeBox();
+		});
+		box->boxClosing() | rpl::on_next([=] {
+			answer(false);
+		}, box->lifetime());
+	}));
 }
 
 void Host::load(const QString &path) {
@@ -281,9 +594,10 @@ void Host::load(const QString &path) {
 		this,
 		std::move(package),
 		data));
-	if (!_disabled.contains(id)) {
+	if (!_disabled.contains(id) && mayRun()) {
 		_plugins.back()->start();
 	}
+	notifyChanged();
 }
 
 void Host::watchDevFolders() {
@@ -383,6 +697,7 @@ void Host::reload(const QString &origin) {
 
 void Host::stop() {
 	SetSink(nullptr);
+	QFile::remove(StartingMarkPath());
 	_devTimer.cancel();
 	_devStamps.clear();
 	for (const auto &plugin : _plugins) {
@@ -555,8 +870,19 @@ RawResult Host::request(const RawRequest &request) {
 		if (result.verdict == Verdict::Cancel) {
 			return result;
 		} else if (result.verdict == Verdict::Modify) {
+			// A filter may stop a sensitive request, never write one:
+			// no new recipient of a gift, no request turned into a payment.
+			const auto modified = Tl::MethodOf(result.body);
+			const auto was = QString::fromLatin1(Tl::Name(method));
+			const auto now = QString::fromLatin1(Tl::Name(modified));
+			if (_engine.confirmSensitive
+				&& (IsSensitiveMethod(was) || IsSensitiveMethod(now))) {
+				LOG(("Plugins: %1 may not change %2 into %3"
+					).arg(plugin->manifest().id, was, now));
+				continue;
+			}
 			body = std::move(result.body);
-			method = Tl::MethodOf(*body);
+			method = modified;
 		}
 	}
 	if (Has(Hook::Response)) {
@@ -718,7 +1044,7 @@ void Host::setPluginEnabled(const QString &id, bool enabled) {
 		}
 		if (enabled) {
 			_disabled.remove(id);
-			if (!plugin->start()) {
+			if (mayRun() && !plugin->start()) {
 				Toast(plugin->manifest().name
 					+ u": "_q
 					+ plugin->lastError());
@@ -729,6 +1055,8 @@ void Host::setPluginEnabled(const QString &id, bool enabled) {
 		}
 		saveDisabled();
 		refreshHooks();
+		Plugins::RefreshDisplayText();
+		notifyChanged();
 		return;
 	}
 }
@@ -752,22 +1080,33 @@ void Host::offerInstall(const QString &path) {
 			return;
 		}
 	}
-	const auto text = Describe(manifest);
+	if (!_engine.unknownSources) {
+		controller->showToast(Translated(
+			"Installing plugins from files is off: Settings > Plugins > "
+			"Plugin engine > Unknown sources.",
+			"Установка плагинов из файлов выключена: Настройки > Плагины > "
+			"Движок плагинов > Неизвестные источники."));
+		return;
+	}
+	auto view = PluginView{
+		.id = manifest.id,
+		.name = manifest.name,
+		.version = manifest.version,
+		.author = manifest.author,
+		.description = manifest.description,
+		.permissions = manifest.permissions,
+		.origin = path,
+		.icon = ReadIcon(package.files, manifest.icon),
+	};
 	const auto weak = base::make_weak(this);
-	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-		box->setTitle(tr::fg_plugins_install_title());
-		box->addRow(object_ptr<Ui::FlatLabel>(box, text, st::boxLabel));
-		box->addButton(tr::fg_plugins_install(), [=] {
-			box->closeBox();
-			if (const auto strong = weak.get()) {
-				strong->install(path, manifest.id);
-			}
-		});
-		box->addButton(tr::lng_cancel(), [=] { box->closeBox(); });
-	}));
+	ShowInstallBox(controller, std::move(view), [=](bool enable) {
+		if (const auto strong = weak.get()) {
+			strong->install(path, manifest.id, enable);
+		}
+	});
 }
 
-void Host::install(const QString &path, const QString &id) {
+void Host::install(const QString &path, const QString &id, bool enable) {
 	const auto target = QString(PluginsPath() + id + u".flua"_q);
 	for (auto i = begin(_plugins); i != end(_plugins); ++i) {
 		if ((*i)->manifest().id == id) {
@@ -785,10 +1124,15 @@ void Host::install(const QString &path, const QString &id) {
 			return;
 		}
 	}
-	_disabled.remove(id);
+	if (enable) {
+		_disabled.remove(id);
+	} else {
+		_disabled.emplace(id);
+	}
 	saveDisabled();
 	load(target);
 	refreshHooks();
+	Plugins::RefreshDisplayText();
 	Toast(tr::fg_plugins_installed(tr::now));
 }
 
@@ -824,86 +1168,9 @@ bool Host::hasPluginManager() {
 }
 
 void Host::openPluginManager(Window::SessionController *controller) {
-	if (!controller) {
-		return;
+	if (controller) {
+		controller->showSettings(Settings::PluginsId());
 	}
-	struct Row {
-		QString id;
-		QString text;
-		bool enabled = false;
-	};
-	auto rows = std::vector<Row>();
-	for (const auto &plugin : _plugins) {
-		const auto &manifest = plugin->manifest();
-		auto text = QString(manifest.name + u' ' + manifest.version);
-		if (!manifest.author.isEmpty()) {
-			text += u" · "_q + manifest.author;
-		}
-		if (_disabled.contains(manifest.id)) {
-			text += u'\n' + tr::fg_plugins_disabled(tr::now);
-		} else if (plugin->running()) {
-			text += u'\n' + tr::fg_plugins_running(tr::now);
-		} else {
-			text += u'\n' + tr::fg_plugins_stopped(tr::now)
-				+ u": "_q
-				+ plugin->lastError();
-		}
-		rows.push_back({
-			.id = manifest.id,
-			.text = text,
-			.enabled = !_disabled.contains(manifest.id),
-		});
-	}
-	auto invalid = QStringList();
-	for (const auto &entry : _invalid) {
-		invalid.push_back(QFileInfo(entry.origin).fileName()
-			+ u": "_q
-			+ entry.error);
-	}
-	const auto empty = rows.empty() && invalid.isEmpty();
-	const auto weak = base::make_weak(this);
-	controller->show(Box([=](not_null<Ui::GenericBox*> box) {
-		box->setTitle(tr::fg_plugins());
-		if (empty) {
-			box->addRow(object_ptr<Ui::FlatLabel>(
-				box,
-				tr::fg_plugins_empty(tr::now)
-					+ u'\n'
-					+ QDir::toNativeSeparators(PluginsPath()),
-				st::boxLabel));
-		}
-		for (const auto &row : rows) {
-			box->addRow(object_ptr<Ui::FlatLabel>(
-				box,
-				row.text,
-				st::boxLabel));
-			const auto toggle = box->addRow(object_ptr<Ui::Checkbox>(
-				box,
-				tr::fg_plugins_enabled(tr::now),
-				row.enabled,
-				st::defaultBoxCheckbox));
-			const auto id = row.id;
-			toggle->checkedChanges(
-			) | rpl::on_next([=](bool checked) {
-				if (const auto strong = weak.get()) {
-					strong->setPluginEnabled(id, checked);
-				}
-			}, toggle->lifetime());
-		}
-		if (!invalid.isEmpty()) {
-			box->addRow(object_ptr<Ui::FlatLabel>(
-				box,
-				tr::fg_plugins_not_loaded(tr::now)
-					+ u'\n'
-					+ invalid.join(u'\n'),
-				st::boxLabel));
-		}
-		box->addLeftButton(tr::fg_plugins_open_folder(), [] {
-			QDir().mkpath(PluginsPath());
-			QDesktopServices::openUrl(QUrl::fromLocalFile(PluginsPath()));
-		});
-		box->addButton(tr::lng_close(), [=] { box->closeBox(); });
-	}));
 }
 
 } // namespace Plugins::Flua

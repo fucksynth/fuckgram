@@ -19,10 +19,13 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QBuffer>
+#include <QtGui/QImageReader>
 
 namespace Plugins::Flua {
 namespace {
 
+constexpr auto kMaxIconSide = 1024;
 constexpr auto kMaxFileSize = 4 * 1024 * 1024;
 constexpr auto kMaxPackageSize = 16 * 1024 * 1024;
 constexpr auto kMaxFiles = 512;
@@ -73,6 +76,7 @@ void ParseManifest(Package &package) {
 	manifest.author = json.value(u"author"_q).toString();
 	manifest.description = json.value(u"description"_q).toString();
 	manifest.entry = json.value(u"entry"_q).toString(u"init.lua"_q);
+	manifest.icon = json.value(u"icon"_q).toString();
 
 	static const auto idCheck = QRegularExpression(
 		u"^[a-z0-9][a-z0-9_.\\-]{1,63}$"_q);
@@ -86,6 +90,11 @@ void ParseManifest(Package &package) {
 		|| !manifest.entry.endsWith(u".lua"_q)
 		|| !package.files.contains(manifest.entry)) {
 		package.error = u"entry file is missing: "_q + manifest.entry;
+		return;
+	} else if (!manifest.icon.isEmpty()
+		&& (!GoodPath(manifest.icon)
+			|| !package.files.contains(manifest.icon))) {
+		package.error = u"icon file is missing: "_q + manifest.icon;
 		return;
 	}
 
@@ -301,6 +310,68 @@ Package ReadPackageFolder(const QString &path) {
 		result.error = AnalyzePackage(result);
 	}
 	return result;
+}
+
+QImage ReadIcon(
+		const std::map<QString, QByteArray> &files,
+		const QString &path) {
+	if (path.isEmpty()) {
+		return QImage();
+	}
+	const auto i = files.find(path);
+	if (i == end(files)) {
+		return QImage();
+	}
+	auto bytes = i->second;
+	QBuffer buffer(&bytes);
+	if (!buffer.open(QIODevice::ReadOnly)) {
+		return QImage();
+	}
+	QImageReader reader(&buffer);
+	// The size first: a small file may unpack into a huge picture.
+	const auto size = reader.size();
+	if (!size.isValid()
+		|| size.width() > kMaxIconSide
+		|| size.height() > kMaxIconSide) {
+		return QImage();
+	}
+	const auto result = reader.read();
+	return result.isNull()
+		? QImage()
+		: result.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+
+bool WritePackageFile(
+		const std::map<QString, QByteArray> &files,
+		const QString &path) {
+	zlib::FileToWrite zip;
+	zip_fileinfo zfi = { { 0, 0, 0, 0, 0, 0 }, 0, 0, 0 };
+	for (const auto &[name, data] : files) {
+		const auto utf8 = name.toUtf8();
+		zip.openNewFile(
+			utf8.constData(),
+			&zfi,
+			nullptr,
+			0,
+			nullptr,
+			0,
+			nullptr,
+			Z_DEFLATED,
+			Z_DEFAULT_COMPRESSION);
+		zip.writeInFile(data.constData(), unsigned(data.size()));
+		zip.closeFile();
+	}
+	zip.close();
+	if (zip.error() != ZIP_OK) {
+		LOG(("Plugins Error: could not pack %1, status: %2"
+			).arg(path
+			).arg(zip.error()));
+		return false;
+	}
+	const auto bytes = zip.result();
+	auto file = QFile(path);
+	return file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+		&& (file.write(bytes) == bytes.size());
 }
 
 } // namespace Plugins::Flua

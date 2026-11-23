@@ -368,12 +368,38 @@ const QString &Plugin::origin() const {
 	return _package.origin;
 }
 
+const std::map<QString, QByteArray> &Plugin::files() const {
+	return _package.files;
+}
+
 bool Plugin::running() const {
 	return _lua != nullptr;
 }
 
 const QString &Plugin::lastError() const {
 	return _lastError;
+}
+
+QImage Plugin::icon() const {
+	if (!_icon) {
+		_icon = ReadIcon(_package.files, manifest().icon);
+	}
+	return *_icon;
+}
+
+const std::deque<QString> &Plugin::journal() const {
+	return _journal;
+}
+
+void Plugin::addToJournal(const QString &text) {
+	constexpr auto kMaxLines = 300;
+	constexpr auto kMaxLine = 2000;
+	_journal.push_back(QTime::currentTime().toString(u"HH:mm:ss"_q)
+		+ u"  "_q
+		+ text.left(kMaxLine));
+	while (_journal.size() > kMaxLines) {
+		_journal.pop_front();
+	}
 }
 
 Plugin *Plugin::From(lua_State *L) {
@@ -442,6 +468,8 @@ bool Plugin::start() {
 	LOG(("Plugins: started %1 %2"
 		).arg(manifest().id
 		).arg(manifest().version));
+	addToJournal(u"started"_q);
+	_host->notifyChanged();
 	return true;
 }
 
@@ -467,7 +495,9 @@ void Plugin::stop() {
 	}
 	_methodFilters.clear();
 	_menu.clear();
+	addToJournal(u"stopped"_q);
 	_host->refreshHooks();
+	_host->notifyChanged();
 }
 
 int Plugin::Setup(lua_State *L) {
@@ -711,6 +741,8 @@ bool Plugin::protect(
 void Plugin::fail(const QString &error) {
 	_lastError = error;
 	LOG(("Plugins Error: %1: %2").arg(manifest().id, error));
+	addToJournal(u"ERROR: "_q + error);
+	_host->notifyChanged();
 	if (++_errors >= kMaxErrors) {
 		LOG(("Plugins: %1 stopped after %2 errors"
 			).arg(manifest().id
@@ -1249,7 +1281,9 @@ int Plugin::ApiPrint(lua_State *L) {
 		parts.push_back(QString::fromUtf8(data, int(size)));
 		lua_pop(L, 1);
 	}
-	LOG(("Plugins [%1]: %2").arg(plugin->manifest().id, parts.join(u' ')));
+	const auto text = parts.join(u' ');
+	LOG(("Plugins [%1]: %2").arg(plugin->manifest().id, text));
+	plugin->addToJournal(text);
 	return 0;
 }
 
@@ -1985,8 +2019,7 @@ int Plugin::ApiInvoke(lua_State *L) {
 		pending->answered = true;
 		pending->finish(reply, error);
 	};
-	// Sent on the next event loop turn, not from inside a running hook.
-	crl::on_main(session, [=, body = std::move(body)] {
+	const auto send = [=, body = std::move(body)] {
 		auto request = MTP::details::SerializedRequest::Prepare(
 			uint32(body.size()));
 		request->append(body);
@@ -2008,6 +2041,29 @@ int Plugin::ApiInvoke(lua_State *L) {
 			0,  // main dc
 			0,  // send now
 			0); // after no request
+	};
+	const auto name = QString::fromLatin1(Tl::Name(method));
+	const auto pluginName = plugin->manifest().name;
+	// Sent on the next event loop turn, not from inside a running hook.
+	crl::on_main(session, [=] {
+		const auto strong = host.get();
+		if (!strong
+			|| !strong->engine().confirmSensitive
+			|| !IsSensitiveMethod(name)) {
+			send();
+			return;
+		}
+		// Stars, gifts, sessions, the password: only after a "yes".
+		strong->confirmSensitive(pluginName, name, [=](bool allowed) {
+			if (allowed) {
+				crl::on_main(session, send);
+			} else {
+				const auto error = MTP::Error::Local(
+					u"PLUGIN_DENIED"_q,
+					u"The user did not allow this request."_q);
+				answer(nullptr, &error);
+			}
+		});
 	});
 	if (callback) {
 		return 0;

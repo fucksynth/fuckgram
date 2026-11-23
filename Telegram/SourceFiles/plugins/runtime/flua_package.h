@@ -40,6 +40,7 @@ struct Manifest {
 	QString author;
 	QString description;
 	QString entry;
+	QString icon; // optional picture in the package, e.g. resources/icon.png
 	int apiMin = 0;
 	int apiMax = 0;
 	std::vector<QString> permissions;
@@ -60,5 +61,15 @@ struct Package {
 
 [[nodiscard]] Package ReadPackageFile(const QString &path);
 [[nodiscard]] Package ReadPackageFolder(const QString &path);
+
+// The picture at `path` in the package, null if it is not a small image.
+[[nodiscard]] QImage ReadIcon(
+	const std::map<QString, QByteArray> &files,
+	const QString &path);
+
+// Packs the files into a .flua (zip) at `path`.
+[[nodiscard]] bool WritePackageFile(
+	const std::map<QString, QByteArray> &files,
+	const QString &path);
 
 } // namespace Plugins::Flua
