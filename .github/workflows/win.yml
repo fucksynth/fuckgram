@@ -250,7 +250,8 @@ jobs:
       - name: Free space for the page file.
         continue-on-error: true
         shell: pwsh
-        run: Get-PSDrive C, D -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('{0}: {1:N1} GB free' -f $_.Name, ($_.Free / 1GB)) }
+        run: |
+          Get-PSDrive C, D -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('{0}: {1:N1} GB free' -f $_.Name, ($_.Free / 1GB)) }
 
       # Pinned to a commit: third-party action in a repo with secrets.
       - uses: al-cheb/configure-pagefile-action@9b6da52fb72a3c6147c1aad2df22d8d905681adc
