@@ -9,13 +9,28 @@ A Telegram Desktop client with plugins on Lua. Based on
 based on [Telegram Desktop](https://github.com/telegramdesktop/tdesktop).
 
 [![Windows](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml/badge.svg?branch=release)](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
+[![Release](https://img.shields.io/github/v/release/fucksynth/fuckgram?label=release)](https://github.com/fucksynth/fuckgram/releases/latest)
 
 Channel: [@fuckgramdesktop](https://t.me/fuckgramdesktop) ·
-Plugins: [@fuckgramplugins](https://t.me/fuckgramplugins)
+Plugins: [@fuckgramplugins](https://t.me/fuckgramplugins) ·
+[Official plugins](https://github.com/fucksynth/fuckgram-plugins)
 
-> **Status.** Windows builds work. `release` is the main branch and builds
-> the Release client, `dev` is where development goes and builds Debug.
-> There are no GitHub releases yet; Linux and macOS are not built yet.
+> **Status.** Windows x64. The current version is
+> [7.2.9](https://github.com/fucksynth/fuckgram/releases/latest); it updates
+> itself. Next: the move to Telegram Desktop 7.4.6 (Qt 6, Windows 10 and
+> newer). Linux and macOS are not built yet.
+
+## Download
+
+Get the `win-x64` zip from
+[Releases](https://github.com/fucksynth/fuckgram/releases/latest) and put
+`fuckgram.exe` in a folder of its own: it keeps its data next to itself.
+
+From then on fuckgram updates itself to every stable release. It checks
+once a day, downloads the new version in the background, checks its
+SHA-256 and shows "Update fuckgram" under the chat list; after the restart
+it shows what is new. fuckgram Preferences → Updates has the state, the
+check button and the switch. Pre-releases are not offered.
 
 ## Features
 
@@ -32,42 +47,61 @@ Premium features. Plus:
 - **Code check before install.** The manifest lists permissions; the code
   is analysed when a plugin is imported, and a plugin that uses more — or
   less — than it declares is not installed.
-- **43 hooks into the client:** new and sent messages, menus of messages,
-  chats, profiles and the main menu, text shown in chats and the chat list,
-  links, replies, reactions, calls, the player, profile rows, screens, and
-  raw MTProto requests, responses and updates.
-- **API:** send, edit and delete messages; chats and users; the message
-  field; dialogs, notices and the clipboard; settings and files of the
+- **45 hooks into the client:** new and sent messages; menus of messages,
+  chats, profiles, the send button and the main menu; any section of the
+  settings; text shown in chats and the chat list; links, replies,
+  reactions, calls, the player, profile rows, screens; raw MTProto
+  requests, responses and updates.
+- **Interface:** a settings page for every plugin (switches, choices,
+  inputs, sliders, nested pages), menu items with icons anywhere, dialogs
+  and toasts, and its own drawing: a canvas for rows and floating panels
+  over the window.
+- **API:** send, edit and delete messages (Markdown and HTML); chats and
+  users; the message field; the music player; settings and files of the
   plugin; timers, JSON, HTTPS to declared hosts, coroutines; any API method
   through `tg.invoke` with a TL codec of the client's layer.
+- **Translations:** a plugin speaks the language of the interface:
+  `locales/<language>.json` with `plugin.t()`, plural forms included, and
+  translated names and descriptions in the manifest.
 - **Safety:** payments, Stars, gifts, logins, sessions, the password,
   Telegram Passport and account deletion called by a plugin wait for the
   user's "Allow". A crash while plugins start turns safe mode on.
 - **Plugin manager** (Settings → Plugins): cards with icons, versions and
-  permissions, on/off, journal, share, delete; plugin engine settings with a
-  developer mode that reloads plugin folders on save.
-- **Install** by opening a `.flua` file in any chat, or from the **plugin
-  catalog**: verified channels and your own ones, with categories, search
-  and updates.
+  permissions, on/off, settings, journal, share, delete; a developer mode
+  that reloads plugin folders on save.
+- **Plugin catalog:** the verified channel and the official repository,
+  your own channels, categories, search and updates. Or open a `.flua`
+  file in any chat.
 
 ### Also
 
-- 12 app icons (Settings → fuckgram → Appearance → App icon).
+- 12 app icons (fuckgram Preferences → Appearance → App icon).
 
 ## Plugins
 
-Ready to use, in [examples/plugins](examples/plugins):
+The official ones live in
+[fucksynth/fuckgram-plugins](https://github.com/fucksynth/fuckgram-plugins)
+and in [@fuckgramplugins](https://t.me/fuckgramplugins); the catalog in the
+client shows them.
 
 | Plugin | What it does |
 |---|---|
-| Link cleaner | strips trackers (`utm_*`, `fbclid`, `si`…) from links you send |
+| Material Player | the music player as a Material 3 card over the window |
+| Pixel Cat | a pixel cat walks around the window; pet it |
+| Link Cleaner | strips trackers (`utm_*`, `fbclid`, `si`…) from links you send |
 | Calculator | `2+2*2=` is sent as `2+2*2 = 6` |
-| Currency | `/cur 100 usd rub` sends the amount at today's rate |
-| Layout | fixes text typed in the wrong keyboard layout |
-| Auto-reply | `/away text` answers private chats while you are away |
-| hello, weather, raw, selftest | examples of the API |
+| Exchange Rates | `/cur 100 usd rub` sends the amount at today's rate |
+| Keyboard Layout | fixes text typed in the wrong keyboard layout |
+| Auto-Reply | answers private chats while you are away |
+| API Showcase | every kind of page, menu and drawing a plugin can make |
 
-A plugin is a folder with `manifest.json` and `init.lua`:
+Examples for authors (hello, weather, raw, selftest) are in
+[examples/plugins](examples/plugins).
+
+## Writing a plugin
+
+A plugin is a folder with `manifest.json`, `init.lua` and, for
+translations, `locales/`:
 
 ```lua
 plugin.on("message.send", function(draft)
@@ -75,34 +109,30 @@ plugin.on("message.send", function(draft)
         return "¯\\_(ツ)_/¯"
     end
 end)
+
+plugin.menu{
+    place = "main",
+    text = plugin.t("menu.hello"),
+    icon = "plugins",
+    on_click = function() tg.toast(plugin.t("hello")) end,
+}
 ```
 
-Pack it with `python tools/flua_pack.py <folder>` and post the `.flua` in a
-channel. The API, permissions and the catalog are described in
+Pack it with `python tools/flua_pack.py <folder>`. The API, permissions,
+pages, translations and the catalog are described in
 [docs/plugins.md](docs/plugins.md); types for editors are in
 [docs/sdk/fuckgram.lua](docs/sdk/fuckgram.lua).
-
-## Downloads
-
-The newest version is in [Releases](https://github.com/fucksynth/fuckgram/releases/latest):
-the `win-x64` zip with `fuckgram.exe`. Put the exe in a folder of its own:
-it keeps its data next to itself. After that fuckgram updates itself to
-every new stable release: it checks once a day, downloads the new version
-in the background, checks its SHA-256 and offers "Update fuckgram" under
-the chat list (fuckgram Preferences → Updates). Pre-releases are not
-offered. How a release is made: [docs/releasing.md](docs/releasing.md).
-
-Debug builds of `dev` are in [GitHub Actions](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
-(sign in to GitHub to download, kept for 2 days); they do not update
-themselves.
 
 ## Building
 
 - [Windows](docs/building-win.md)
 - [Linux](docs/building-linux.md)
 - [macOS](docs/building-mac.md)
+- [How a release is made](docs/releasing.md)
 
-You need your own [API credentials](docs/api_credentials.md).
+You need your own [API credentials](docs/api_credentials.md). Branches:
+`release` is the main one and builds the Release client, `dev` is where
+development goes and builds Debug.
 
 ## License
 
