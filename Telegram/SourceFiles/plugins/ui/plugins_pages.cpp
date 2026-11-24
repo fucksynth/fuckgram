@@ -622,8 +622,10 @@ void PageSection::addRow(not_null<Plugin*> plugin, const PageItem &item) {
 		const auto value = std::clamp(current().toDouble(min), min, max);
 		row->setValue(NumberText(value));
 		const auto slider = _content->add(
-			object_ptr<Ui::MediaSlider>(_content, st::settingsScale),
+			object_ptr<Ui::MediaSliderWheelless>(_content, st::settingsScale),
 			st::pluginsPageSliderPadding);
+		// Made with zero height, it would be there but not seen.
+		slider->resize(slider->width(), st::settingsScale.seekSize.height());
 		const auto onChange = item.onChange;
 		slider->setPseudoDiscrete(
 			count,
