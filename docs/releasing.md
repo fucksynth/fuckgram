@@ -20,14 +20,12 @@ Nothing reaches users until a release is published by hand.
    else up to 40 latest commits since the last release. A draft of the same
    version made before is replaced.
 3. Download the zip from the draft and check it.
-4. **Sign it** on your own computer: open
-   [`tools/release-sign/sign.html`](../tools/release-sign/sign.html) in
-   Chrome, Edge or Firefox (it works offline), pick the key file
-   `fuckgram-release-key.json`, its password and the zip: you get
-   `<zip>.sig`. Drop it into the draft's files. Clients install only an
-   archive with a matching signature; the key never goes to GitHub, so a
-   release made by someone who gets into the account does not install.
-   The key is made once on the same page; its public half is
+4. **Sign it** on the releaser's machine, where the key is (never on
+   GitHub): `GH_TOKEN=... python tools/release-sign/sign_release.py 7.2.10
+   <release key .pem>` downloads the draft's zip, signs it with Ed25519 and
+   uploads `<zip>.sig` to the draft. Clients install only an archive with a
+   matching signature, so a release made by someone who gets into the
+   account does not install. The public half of the key is
    `kReleasePublicKey` in `Telegram/SourceFiles/fuckgram/fuckgram_updater.cpp`.
 5. Edit the notes (they are the "What's new" window in the client: headings,
    `**bold**`, lists and links are shown) and **Publish**. "Set as a
@@ -40,7 +38,7 @@ later) but make no drafts; Debug builds of `dev` never update.
 
 A release made without the workflow works as well: a zip whose name has
 `win` and `x64` with the exe (at the top or in a folder) of a stamped
-Release build named `fuckgram.exe`, its `<zip>.sig` from the signing page,
+Release build named `fuckgram.exe`, its `<zip>.sig` made by `sign_release.py`,
 a tag on the commit the exe was built from.
 
 ## How the client decides

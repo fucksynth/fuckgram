@@ -143,12 +143,9 @@ jobs:
             ${{ runner.os }}-x64-libs-${{ env.CACHE_KEY }}
             ${{ runner.os }}-x64-${{ env.LIBS }}-
 
-      # Takes 5+ minutes and is needed to build the libraries, and for
-      # Release always: its libraries and build cache with debug info do
-      # not fit next to the preinstalled software. Debug with the libraries
-      # from the cache has 30 GB free, enough for the client.
+      # Takes 5+ minutes, needed every time: the Qt 6 libraries and the
+      # build cache do not fit next to the preinstalled software.
       - name: Clean up preinstalled software.
-        if: steps.libs.outputs.cache-hit != 'true' || env.BUILD_TYPE == 'Release'
         shell: pwsh
         run: |
           $before = (Get-PSDrive C).Free / 1GB
