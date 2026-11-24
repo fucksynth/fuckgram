@@ -35,7 +35,7 @@ struct EngineSettings {
 	bool enabled = true;          // plugins run at all
 	bool devMode = true;          // development folders reload themselves
 	bool compact = false;         // short cards in the manager
-	bool unknownSources = true;   // install .flua files sent in chats
+	bool unknownSources = false;  // install .flua files sent in chats
 	bool confirmSensitive = true; // see IsSensitiveMethod()
 	bool safeMode = false;        // nothing starts; set after a crash
 

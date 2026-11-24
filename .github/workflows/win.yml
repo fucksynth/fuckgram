@@ -210,6 +210,10 @@ jobs:
           if [ -n "$API_ID" ] && [ -n "$API_HASH" ]; then
             echo "Using API credentials from repository secrets."
             API="-D TDESKTOP_API_ID=$API_ID -D TDESKTOP_API_HASH=$API_HASH"
+          elif [ "$BUILD_TYPE" = "Release" ]; then
+            # A Release build goes to users: never with the test API.
+            echo "::error::TDESKTOP_API_ID / TDESKTOP_API_HASH secrets are not set: a Release build needs them."
+            exit 1
           else
             echo "::warning::TDESKTOP_API_ID / TDESKTOP_API_HASH secrets are not set, building with test API."
             API="-D TDESKTOP_API_TEST=ON"

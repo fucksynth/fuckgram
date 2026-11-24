@@ -174,3 +174,9 @@ pluginsPageSubtitleStyle: TextStyle(defaultTextStyle) {
 }
 pluginsPageValueFont: font(14px);
 pluginsPageSliderPadding: margins(22px, 0px, 22px, 10px);
+
+// A .flua file in a chat: a puzzle piece with the fuckgram asterisk.
+fluaHistoryFileIn: icon {{ "fuckgram/history_file_flua", historyFileInIconFg }};
+fluaHistoryFileInSelected: icon {{ "fuckgram/history_file_flua", historyFileInIconFgSelected }};
+fluaHistoryFileOut: icon {{ "fuckgram/history_file_flua", historyFileOutIconFg }};
+fluaHistoryFileOutSelected: icon {{ "fuckgram/history_file_flua", historyFileOutIconFgSelected }};

@@ -1260,14 +1260,16 @@ void PluginsEngineSection::setupContent() {
 	add(
 		"Confirm sensitive actions",
 		"Подтверждать важные действия",
-		"Stars, gifts, payments, sessions, the password: plugins do them "
-		"only after your \"yes\".",
-		"Звёзды, подарки, платежи, сеансы, пароль: плагины делают это "
-		"только после вашего «да».",
+		"Stars, gifts, payments, sessions, the password, account changes, "
+		"logins to sites: plugins do them only after your \"yes\". "
+		"Always on.",
+		"Звёзды, подарки, платежи, сеансы, пароль, изменения аккаунта, "
+		"входы на сайты: плагины делают это только после вашего «да». "
+		"Всегда включено.",
 		st::pluginsEngineIconConfirm,
 		st::settingsIconBg1,
-		engine.confirmSensitive,
-		[](Flua::EngineSettings &e, bool on) { e.confirmSensitive = on; });
+		true,
+		nullptr);
 	add(
 		"Safe mode",
 		"Безопасный режим",

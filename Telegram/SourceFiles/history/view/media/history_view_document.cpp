@@ -896,6 +896,10 @@ void Document::draw(
 						u".plugin"_q,
 						Qt::CaseInsensitive)
 					? stm->historyFilePlugin
+					: _data->filename().endsWith(
+						u".flua"_q,
+						Qt::CaseInsensitive)
+					? stm->historyFileFlua
 					: stm->historyFileDocument;
 			} else {
 				return _data->isSongWithCover()

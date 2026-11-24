@@ -2332,9 +2332,8 @@ int Plugin::ApiInvoke(lua_State *L) {
 	// Sent on the next event loop turn, not from inside a running hook.
 	crl::on_main(session, [=] {
 		const auto strong = host.get();
-		if (!strong
-			|| !strong->engine().confirmSensitive
-			|| !IsSensitiveMethod(name)) {
+		// Always asked: no setting turns it off.
+		if (!strong || !IsSensitiveMethod(name)) {
 			send();
 			return;
 		}

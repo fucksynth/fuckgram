@@ -3,7 +3,8 @@
 Users update to the newest **stable release** in
 [Releases](https://github.com/fucksynth/fuckgram/releases): the client
 checks it once a day, downloads its Windows zip, checks it by the SHA-256
-GitHub keeps for every uploaded file, offers "Update fuckgram" under the
+GitHub keeps for every uploaded file and by the release's Ed25519
+signature, offers "Update fuckgram" under the
 chat list and shows the release notes after the restart ("What's new").
 Nothing reaches users until a release is published by hand.
 
@@ -19,7 +20,16 @@ Nothing reaches users until a release is published by hand.
    else up to 40 latest commits since the last release. A draft of the same
    version made before is replaced.
 3. Download the zip from the draft and check it.
-4. Edit the notes (they are the "What's new" window in the client: headings,
+4. **Sign it** on your own computer: open
+   [`tools/release-sign/sign.html`](../tools/release-sign/sign.html) in
+   Chrome, Edge or Firefox (it works offline), pick the key file
+   `fuckgram-release-key.json`, its password and the zip: you get
+   `<zip>.sig`. Drop it into the draft's files. Clients install only an
+   archive with a matching signature; the key never goes to GitHub, so a
+   release made by someone who gets into the account does not install.
+   The key is made once on the same page; its public half is
+   `kReleasePublicKey` in `Telegram/SourceFiles/fuckgram/fuckgram_updater.cpp`.
+5. Edit the notes (they are the "What's new" window in the client: headings,
    `**bold**`, lists and links are shown) and **Publish**. "Set as a
    pre-release" keeps it from users.
 
@@ -30,7 +40,8 @@ later) but make no drafts; Debug builds of `dev` never update.
 
 A release made without the workflow works as well: a zip whose name has
 `win` and `x64` with the exe (at the top or in a folder) of a stamped
-Release build, a tag on the commit the exe was built from.
+Release build named `fuckgram.exe`, its `<zip>.sig` from the signing page,
+a tag on the commit the exe was built from.
 
 ## How the client decides
 

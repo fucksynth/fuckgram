@@ -38,6 +38,8 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
 
+#include <openssl/evp.h>
+
 namespace Fuckgram {
 namespace {
 
@@ -47,6 +49,46 @@ constexpr auto kFirstCheckDelay = 30 * crl::time(1000);
 constexpr auto kTimerPeriod = 60 * 60 * crl::time(1000);
 constexpr auto kToastDelay = 5 * crl::time(1000);
 constexpr auto kMaxArchive = qint64(400) * 1024 * 1024;
+constexpr auto kMaxSignature = qint64(1024);
+
+// Every release archive is signed by this Ed25519 key: "<archive>.sig"
+// next to it in the release is the base64 signature of the archive's bytes.
+// The private key is kept only on the releaser's computer, not on GitHub:
+// a release made by whoever gets into the account does not install.
+constexpr auto kReleasePublicKey = std::array<unsigned char, 32>{
+	0x43, 0x83, 0x28, 0x3f, 0x6e, 0xb4, 0xd6, 0xef,
+	0xe4, 0x70, 0x08, 0x99, 0x74, 0x8d, 0x8f, 0x68,
+	0xc2, 0x76, 0xf7, 0xb3, 0xf3, 0xc1, 0x34, 0x89,
+	0x2c, 0x74, 0x43, 0x92, 0xd5, 0x25, 0xf7, 0x9c,
+};
+
+[[nodiscard]] bool GoodReleaseSignature(
+		const QByteArray &data,
+		const QByteArray &signature) {
+	if (signature.size() != 64) {
+		return false;
+	}
+	const auto key = EVP_PKEY_new_raw_public_key(
+		EVP_PKEY_ED25519,
+		nullptr,
+		kReleasePublicKey.data(),
+		kReleasePublicKey.size());
+	if (!key) {
+		return false;
+	}
+	const auto context = EVP_MD_CTX_new();
+	const auto result = context
+		&& (EVP_DigestVerifyInit(context, nullptr, nullptr, nullptr, key) == 1)
+		&& (EVP_DigestVerify(
+			context,
+			reinterpret_cast<const unsigned char*>(signature.constData()),
+			size_t(signature.size()),
+			reinterpret_cast<const unsigned char*>(data.constData()),
+			size_t(data.size())) == 1);
+	EVP_MD_CTX_free(context);
+	EVP_PKEY_free(key);
+	return result;
+}
 constexpr auto kMaxProgram = 900 * 1024 * 1024;
 constexpr auto kMinProgram = 1024 * 1024;
 constexpr auto kMaxNotes = 6000;
@@ -193,6 +235,7 @@ enum class UnpackError {
 	None,
 	Size,
 	Checksum,
+	Signature,
 	NoProgram,
 	Open,
 	Write,
@@ -209,10 +252,13 @@ struct UnpackResult {
 		QByteArray archive,
 		qint64 size,
 		QByteArray sha256,
+		QByteArray signature,
 		QString programName,
 		QString target) {
 	if (archive.size() != size) {
 		return { UnpackError::Size };
+	} else if (!GoodReleaseSignature(archive, signature)) {
+		return { UnpackError::Signature };
 	}
 	if (!sha256.isEmpty()) {
 		const auto hash = QCryptographicHash::hash(
@@ -222,8 +268,8 @@ struct UnpackResult {
 			return { UnpackError::Checksum };
 		}
 	}
-	// The program of the same name, or the biggest program in the
-	// archive; the archive may keep it in a folder.
+	// fuckgram.exe or the program of the same name as the running one,
+	// nothing else; the archive may keep it in a folder.
 	auto zip = zlib::FileToRead(archive);
 	auto program = QByteArray();
 	if (zip.goToFirstFile() == UNZ_OK) {
@@ -234,12 +280,10 @@ struct UnpackResult {
 				|| !name.compare(u"Updater.exe"_q, Qt::CaseInsensitive)) {
 				continue;
 			}
-			const auto same = !name.compare(programName, Qt::CaseInsensitive);
-			auto content = zip.readCurrentFileContent(kMaxProgram);
-			if (same || content.size() > program.size()) {
-				program = std::move(content);
-			}
+			const auto same = !name.compare(programName, Qt::CaseInsensitive)
+				|| !name.compare(u"fuckgram.exe"_q, Qt::CaseInsensitive);
 			if (same) {
+				program = zip.readCurrentFileContent(kMaxProgram);
 				break;
 			}
 		} while (zip.goToNextFile() == UNZ_OK);
@@ -272,6 +316,10 @@ struct UnpackResult {
 		return UpdateText(
 			"the checksum of the downloaded file does not match",
 			"контрольная сумма скачанного файла не совпала");
+	case UnpackError::Signature:
+		return UpdateText(
+			"the release is not signed by fuckgram, it is not installed",
+			"релиз не подписан fuckgram, он не ставится");
 	case UnpackError::NoProgram:
 		return UpdateText(
 			"there is no program in the archive",
@@ -312,6 +360,7 @@ private:
 		QString archiveUrl;
 		qint64 archiveSize = 0;
 		QByteArray sha256; // hex, lowercase; empty if GitHub gave none
+		QString signatureUrl; // "<archive>.sig"
 	};
 
 	void setState(UpdateState state);
@@ -329,6 +378,7 @@ private:
 	void gotRelease(const QByteArray &bytes);
 	void gotTagCommit(const QString &commit);
 	void download();
+	void downloadArchive();
 	void downloaded(const QByteArray &bytes);
 	void unpacked(const QString &error);
 
@@ -338,6 +388,7 @@ private:
 	base::Timer _timer;
 	QPointer<QNetworkReply> _reply;
 	Release _release;
+	QByteArray _signature;
 	int _percent = -1;
 	bool _started = false;
 	bool _manual = false;
@@ -674,6 +725,17 @@ void Updater::gotRelease(const QByteArray &bytes) {
 			: QByteArray();
 		break;
 	}
+	for (const auto value : json.value(u"assets"_q).toArray()) {
+		const auto asset = value.toObject();
+		const auto name = asset.value(u"name"_q).toString();
+		const auto url = asset.value(u"browser_download_url"_q).toString();
+		if (!release.archiveUrl.isEmpty()
+			&& url.startsWith(DownloadsUrl())
+			&& url == release.archiveUrl + u".sig"_q) {
+			release.signatureUrl = url;
+			break;
+		}
+	}
 	_status.available = release.tag;
 	_release = release;
 
@@ -688,6 +750,11 @@ void Updater::gotRelease(const QByteArray &bytes) {
 		fail(UpdateText(
 			"the newest release has no build for Windows x64",
 			"в последнем релизе нет сборки для Windows x64"));
+		return;
+	} else if (release.signatureUrl.isEmpty()) {
+		fail(UpdateText(
+			"the newest release is not signed",
+			"последний релиз не подписан"));
 		return;
 	} else if (release.archiveSize <= 0
 		|| release.archiveSize > kMaxArchive
@@ -728,8 +795,28 @@ void Updater::download() {
 	_status.received = 0;
 	_status.total = _release.archiveSize;
 	_percent = -1;
+	_signature = QByteArray();
 	setState(UpdateState::Downloading);
 
+	// The signature first: it is tiny, and without it nothing installs.
+	const auto reply = get(_release.signatureUrl);
+	connect(reply, &QNetworkReply::finished, this, [=] {
+		reply->deleteLater();
+		if (_reply != reply) {
+			return;
+		}
+		_reply = nullptr;
+		if (reply->error() != QNetworkReply::NoError) {
+			fail(reply->errorString());
+			return;
+		}
+		_signature = QByteArray::fromBase64(
+			reply->read(kMaxSignature).trimmed());
+		downloadArchive();
+	});
+}
+
+void Updater::downloadArchive() {
 	const auto reply = get(_release.archiveUrl);
 	connect(reply, &QNetworkReply::downloadProgress, this, [=](
 			qint64 received,
@@ -769,11 +856,18 @@ void Updater::download() {
 void Updater::downloaded(const QByteArray &bytes) {
 	const auto size = _release.archiveSize;
 	const auto sha256 = _release.sha256;
+	const auto signature = _signature;
 	const auto name = QFileInfo(ProgramPath()).fileName();
 	const auto target = DownloadedPath();
 	const auto guard = QPointer<Updater>(this);
 	crl::async([=] {
-		const auto result = Unpack(bytes, size, sha256, name, target);
+		const auto result = Unpack(
+			bytes,
+			size,
+			sha256,
+			signature,
+			name,
+			target);
 		crl::on_main([=] {
 			if (const auto strong = guard.data()) {
 				strong->unpacked(UnpackErrorText(result));

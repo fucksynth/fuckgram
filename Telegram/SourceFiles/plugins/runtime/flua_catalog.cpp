@@ -30,6 +30,8 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include <QtNetwork/QNetworkReply>
 #include <QtNetwork/QNetworkRequest>
 
+#include <openssl/evp.h>
+
 namespace Plugins::Flua {
 namespace {
 
@@ -51,7 +53,53 @@ constexpr auto kParallel = 4;
 constexpr auto kRepository = "fucksynth/fuckgram-plugins";
 constexpr auto kRepositoryBranch = "main";
 constexpr auto kMaxIndexSize = int64(1024 * 1024);
+constexpr auto kMaxSignedIndexSize = int64(2 * 1024 * 1024);
 constexpr auto kMaxIndexFiles = 500;
+
+// index.signed.json of the official repository is signed by this Ed25519
+// key (its private half is a secret of the repository's CI): a list that
+// does not match is not shown, and a package from a verified source
+// installs as trusted only when its SHA-256 is in a signed list.
+constexpr auto kCatalogPublicKey = std::array<unsigned char, 32>{
+	0x0f, 0x34, 0x2e, 0x62, 0xd7, 0x74, 0xe1, 0x1c,
+	0xd1, 0xce, 0x53, 0x7a, 0x02, 0x50, 0x9c, 0xda,
+	0xb6, 0xfd, 0x32, 0x8c, 0xa1, 0xd8, 0xa9, 0xaf,
+	0xfc, 0xe0, 0x0a, 0x4d, 0x5a, 0xa4, 0x63, 0x84,
+};
+
+[[nodiscard]] bool GoodCatalogSignature(
+		const QByteArray &data,
+		const QByteArray &signature) {
+	if (signature.size() != 64) {
+		return false;
+	}
+	const auto key = EVP_PKEY_new_raw_public_key(
+		EVP_PKEY_ED25519,
+		nullptr,
+		kCatalogPublicKey.data(),
+		kCatalogPublicKey.size());
+	if (!key) {
+		return false;
+	}
+	const auto context = EVP_MD_CTX_new();
+	const auto result = context
+		&& (EVP_DigestVerifyInit(context, nullptr, nullptr, nullptr, key) == 1)
+		&& (EVP_DigestVerify(
+			context,
+			reinterpret_cast<const unsigned char*>(signature.constData()),
+			size_t(signature.size()),
+			reinterpret_cast<const unsigned char*>(data.constData()),
+			size_t(data.size())) == 1);
+	EVP_MD_CTX_free(context);
+	EVP_PKEY_free(key);
+	return result;
+}
+
+// SHA-256 (hex) of every package in a signed list seen in this run.
+[[nodiscard]] base::flat_set<QByteArray> &SignedHashes() {
+	static auto result = base::flat_set<QByteArray>();
+	return result;
+}
 
 [[nodiscard]] QString RepositoryKey(const QString &repository) {
 	return u"github:"_q + repository;
@@ -134,6 +182,20 @@ constexpr auto kMaxIndexFiles = 500;
 }
 
 } // namespace
+
+bool IsSignedCatalogFile(const QString &path) {
+	if (SignedHashes().empty()) {
+		return false;
+	}
+	auto file = QFile(path);
+	if (!file.open(QIODevice::ReadOnly) || file.size() > kMaxFileSize) {
+		return false;
+	}
+	const auto hash = QCryptographicHash::hash(
+		file.readAll(),
+		QCryptographicHash::Sha256).toHex().toLower();
+	return SignedHashes().contains(hash);
+}
 
 int CatalogSource::validCount() const {
 	return int(ranges::count_if(plugins, [](const CatalogPlugin &plugin) {
@@ -714,7 +776,11 @@ void Catalog::requestIndex(const QString &username, int generation) {
 		return;
 	}
 	// The raw files are cached for minutes: a new query each minute.
-	const auto url = RepositoryFileUrl(source->repository, u"index.json"_q)
+	// The signed list: index.json with its signature in one file, so the
+	// two never come from different commits.
+	const auto url = RepositoryFileUrl(
+		source->repository,
+		u"index.signed.json"_q)
 		+ u"?t="_q
 		+ QString::number(base::unixtime::now() / 60);
 	const auto reply = network()->get(RepositoryRequest(url));
@@ -729,18 +795,34 @@ void Catalog::requestIndex(const QString &username, int generation) {
 				"не удалось прочитать репозиторий: ") + reply->errorString());
 			return;
 		}
-		gotIndex(username, generation, reply->read(kMaxIndexSize));
+		gotIndex(username, generation, reply->read(kMaxSignedIndexSize));
 	});
 }
 
-// index.json: { "plugins": [ { "file": "dist/x.flua", "size": 123,
+// index.signed.json: { "index": base64, "signature": base64 }, where
+// index is index.json: { "plugins": [ { "file": "dist/x.flua", "size": 123,
 // "sha256": "...", "date": 1700000000 }, ... ] }, the newest first.
 void Catalog::gotIndex(
 		const QString &username,
 		int generation,
-		const QByteArray &bytes) {
+		const QByteArray &signedBytes) {
 	const auto source = find(username);
 	if (!source) {
+		return;
+	}
+	const auto envelope = QJsonDocument::fromJson(signedBytes).object();
+	const auto bytes = QByteArray::fromBase64(
+		envelope.value(u"index"_q).toString().toLatin1());
+	const auto signature = QByteArray::fromBase64(
+		envelope.value(u"signature"_q).toString().toLatin1());
+	if (bytes.isEmpty()
+		|| bytes.size() > kMaxIndexSize
+		|| !GoodCatalogSignature(bytes, signature)) {
+		LOG(("Plugins Error: the signature of %1 does not match"
+			).arg(source->repository));
+		fail(username, Translated(
+			"the plugin list is not signed by fuckgram",
+			"список плагинов не подписан fuckgram"));
 		return;
 	}
 	const auto document = QJsonDocument::fromJson(bytes);
@@ -765,6 +847,7 @@ void Catalog::gotIndex(
 			|| size > kMaxFileSize) {
 			continue;
 		}
+		SignedHashes().emplace(sha256);
 		found.push_back({
 			.username = username,
 			.msgId = MsgId(int64(list.size()) - int64(found.size())),

@@ -16,6 +16,7 @@ https://github.com/fucksynth/fuckgram/blob/main/LICENSE
 #include "lang/lang_instance.h"
 #include "lang/lang_keys.h"
 #include "logs.h"
+#include "plugins/runtime/flua_catalog.h"
 #include "plugins/runtime/flua_package.h"
 #include "plugins/runtime/flua_plugin.h"
 #include "plugins/runtime/flua_tl.h"
@@ -240,8 +241,23 @@ QString Translated(const char *english, const char *russian) {
 }
 
 bool IsSensitiveMethod(const QString &name) {
+	// By whole sections, so new methods of Telegram are covered by
+	// themselves: auth.* always, account.* and payments.* except reading.
 	if (name.startsWith(u"auth."_q)) {
 		return true;
+	} else if (name.startsWith(u"account."_q)) {
+		// Reading settings is fine; reading secrets and sessions is not.
+		static const auto secret = base::flat_set<QString>{
+			u"account.getPassword"_q,
+			u"account.getPasswordSettings"_q,
+			u"account.getTmpPassword"_q,
+			u"account.getAuthorizations"_q,
+			u"account.getWebAuthorizations"_q,
+			u"account.getAuthorizationForm"_q,
+			u"account.getAllSecureValues"_q,
+			u"account.getSecureValue"_q,
+		};
+		return !name.mid(8).startsWith(u"get"_q) || secret.contains(name);
 	} else if (name.startsWith(u"payments."_q)) {
 		// Reading is fine, everything that pays or moves gifts is not.
 		const auto action = name.mid(9);
@@ -252,6 +268,12 @@ bool IsSensitiveMethod(const QString &name) {
 	}
 	static const auto list = base::flat_set<QString>{
 		u"messages.sendPaidReaction"_q,
+		u"messages.requestUrlAuth"_q,
+		u"messages.acceptUrlAuth"_q,
+		u"messages.requestWebView"_q,
+		u"messages.requestSimpleWebView"_q,
+		u"messages.requestAppWebView"_q,
+		u"messages.requestMainWebView"_q,
 		u"channels.editCreator"_q,
 		u"account.updatePasswordSettings"_q,
 		u"account.getPasswordSettings"_q,
@@ -931,8 +953,7 @@ RawResult Host::request(const RawRequest &request) {
 			const auto modified = Tl::MethodOf(result.body);
 			const auto was = QString::fromLatin1(Tl::Name(method));
 			const auto now = QString::fromLatin1(Tl::Name(modified));
-			if (_engine.confirmSensitive
-				&& (IsSensitiveMethod(was) || IsSensitiveMethod(now))) {
+			if (IsSensitiveMethod(was) || IsSensitiveMethod(now)) {
 				LOG(("Plugins: %1 may not change %2 into %3"
 					).arg(plugin->manifest().id, was, now));
 				continue;
@@ -1164,9 +1185,20 @@ void Host::offerInstall(const QString &path, InstallSource source) {
 			return;
 		}
 	}
-	const auto trusted = (source == InstallSource::VerifiedChannel);
+	// A verified source is trusted only for a package of a signed list:
+	// a channel post alone could be changed by whoever runs the channel.
+	const auto trusted = (source == InstallSource::VerifiedChannel)
+		&& IsSignedCatalogFile(path);
 	if (!trusted && !_engine.unknownSources) {
-		controller->showToast(Translated(
+		controller->showToast((source == InstallSource::VerifiedChannel)
+			? Translated(
+				"This package is not in the signed fuckgram plugin list: "
+				"update the catalog or turn on Settings > Plugins > "
+				"Plugin engine > Unknown sources.",
+				"Этого пакета нет в подписанном списке плагинов fuckgram: "
+				"обновите каталог или включите Настройки > Плагины > "
+				"Движок плагинов > Неизвестные источники.")
+			: Translated(
 			"Installing plugins from files and own channels is off: "
 			"Settings > Plugins > Plugin engine > Unknown sources.",
 			"Установка плагинов из файлов и своих каналов выключена: "

@@ -158,6 +158,11 @@ private:
 // The catalog of the session, made on the first call.
 [[nodiscard]] not_null<Catalog*> CatalogFor(not_null<Main::Session*> session);
 
+// The file is a package listed in a signed index of the official
+// repository (loaded in this run): only such a package from a verified
+// source installs as trusted.
+[[nodiscard]] bool IsSignedCatalogFile(const QString &path);
+
 // "name", "@name", "t.me/name", "https://t.me/name/123" -> "name".
 [[nodiscard]] std::optional<QString> ParseChannelUsername(const QString &text);
 

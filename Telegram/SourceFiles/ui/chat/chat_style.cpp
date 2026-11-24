@@ -24,6 +24,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 // AyuGram includes
 #include "ayu/ayu_settings.h"
 #include "styles/style_ayu_icons.h"
+#include "styles/style_plugins.h"
 
 
 namespace Ui {
@@ -527,6 +528,12 @@ ChatStyle::ChatStyle(rpl::producer<ColorIndicesCompressed> colorIndices) {
 		st::ayuHistoryFileInPluginSelected,
 		st::ayuHistoryFileOutPlugin,
 		st::ayuHistoryFileOutPluginSelected);
+	make(
+		&MessageStyle::historyFileFlua,
+		st::fluaHistoryFileIn,
+		st::fluaHistoryFileInSelected,
+		st::fluaHistoryFileOut,
+		st::fluaHistoryFileOutSelected);
 	make(
 		&MessageStyle::historyAudioDownload,
 		st::historyAudioInDownload,

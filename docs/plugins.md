@@ -519,12 +519,15 @@ cool_plugin.flua
 Writable data (settings, database copies) lives in a separate per-plugin data
 folder, so updating a package does not lose it.
 
-Catalog trust today: "verified source" means the package comes from the
-@fuckgramplugins channel or the official repository
-(`fucksynth/fuckgram-plugins`); from the repository the client also checks
-the file's size and SHA-256 against `index.json`. There are no signatures:
-every package, from any source, is analysed locally on install like a file
-the user opens, so packages must not be obfuscated.
+Catalog trust: the official repository (`fucksynth/fuckgram-plugins`)
+publishes `index.signed.json`, its `index.json` with an Ed25519 signature
+made by the repository's CI; the public key is built into the client. A list
+that does not match is not shown, every file is checked by its size and
+SHA-256 from the list, and a package from a verified source (the repository
+or @fuckgramplugins) installs as trusted only when its SHA-256 is in a signed
+list. Anything else (files from chats, own channels) needs "Unknown sources",
+off by default. Every package, from any source, is also analysed locally on
+install, so packages must not be obfuscated.
 
 ## Hook layer
 

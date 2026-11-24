@@ -1,6 +1,6 @@
-# Agent Guide for AyuGram Desktop
+# Agent Guide for fuckgram (AyuGram Desktop based)
 
-This guide defines repository-wide instructions for coding agents working with the AyuGram Desktop (Telegram Desktop fork) codebase.
+This guide defines repository-wide instructions for coding agents working with the fuckgram codebase (a Telegram Desktop client based on AyuGram Desktop).
 
 Avoid building the project.
 
