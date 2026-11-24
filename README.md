@@ -39,8 +39,8 @@ Premium features. Plus:
 
 ### Plugins on Lua 5.4
 
-- **Sandbox.** Every plugin runs in its own Lua state: no files, processes,
-  `load`, `debug` or bytecode. Time limits per call (50 ms for the send
+- **Sandbox.** Every plugin runs in its own Lua state: no processes,
+  `load`, `debug` or bytecode, and no files but its own data folder. Time limits per call (50 ms for the send
   filter, 200 ms for events, 1 s for menu clicks), 64 MB of memory, and a
   plugin that fails 5 times is stopped.
 - **Code check before install.** The manifest lists permissions; the code

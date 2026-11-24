@@ -3,8 +3,9 @@
 Status: **in development.** The Lua runtime (API version 1) is in the
 client: it checks every package by analysing its code, loads plugins, runs
 them in a sandbox and connects them to the hooks, including raw MTProto
-requests, responses and updates decoded with the TL schema. The `.flua`
-catalog is not done yet.
+requests, responses and updates decoded with the TL schema. The catalog
+installs and updates `.flua` packages from Telegram channels and the
+official GitHub repository.
 
 ## Writing a plugin (API 1)
 
@@ -518,11 +519,12 @@ cool_plugin.flua
 Writable data (settings, database copies) lives in a separate per-plugin data
 folder, so updating a package does not lose it.
 
-Catalog flow: the author uploads plain source → analysis and review →
-obfuscation on the server → the catalog signs the manifest with the verified
-permissions and file hashes. The client trusts that signature and does not
-re-analyse obfuscated code. Packages without a catalog signature are analysed
-locally and must not be obfuscated.
+Catalog trust today: "verified source" means the package comes from the
+@fuckgramplugins channel or the official repository
+(`fucksynth/fuckgram-plugins`); from the repository the client also checks
+the file's size and SHA-256 against `index.json`. There are no signatures:
+every package, from any source, is analysed locally on install like a file
+the user opens, so packages must not be obfuscated.
 
 ## Hook layer
 
