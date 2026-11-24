@@ -5,8 +5,8 @@
 [ [English](README.md) | Русский ]
 
 Клиент Telegram для компьютера с плагинами на Lua. Сделан на основе
-[AyuGram Desktop](https://github.com/AyuGram/AyuGramDesktop) 7.2.9, который,
-в свою очередь, основан на [Telegram Desktop](https://github.com/telegramdesktop/tdesktop).
+[Telegram Desktop](https://github.com/telegramdesktop/tdesktop) 7.4.6 и
+включает всё из [AyuGram Desktop](https://github.com/AyuGram/AyuGramDesktop).
 
 [![Windows](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml/badge.svg?branch=release)](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
 [![Release](https://img.shields.io/github/v/release/fucksynth/fuckgram?label=release)](https://github.com/fucksynth/fuckgram/releases/latest)
@@ -15,10 +15,9 @@
 Плагины: [@fuckgramplugins](https://t.me/fuckgramplugins) ·
 [Официальные плагины](https://github.com/fucksynth/fuckgram-plugins)
 
-> **Состояние.** Windows x64. Текущая версия —
-> [7.2.9](https://github.com/fucksynth/fuckgram/releases/latest), обновляется
-> сама. Дальше — переезд на Telegram Desktop 7.4.6 (Qt 6, Windows 10 и
-> новее). Linux и macOS пока не собираются.
+> **Состояние.** Windows 10 и новее, x64 (Qt 6). Текущая версия —
+> [7.4.6](https://github.com/fucksynth/fuckgram/releases/latest), обновляется
+> сама. Linux и macOS пока не собираются.
 
 ## Скачать
 
@@ -86,7 +85,7 @@
 | Плагин | Что делает |
 |---|---|
 | Плеер Material | музыкальный плеер карточкой Material 3 поверх окна |
-| Пиксельный котик | по окну гуляет пиксельный котик, его можно погладить |
+| Пиксельный котик | по окну гуляет пиксельный котик 8 пород, его можно погладить и перенести мышью |
 | Чистые ссылки | убирает метки (`utm_*`, `fbclid`, `si`…) из отправляемых ссылок |
 | Калькулятор | `2+2*2=` уходит как `2+2*2 = 6` |
 | Курсы валют | `/cur 100 usd rub` отправляет сумму по сегодняшнему курсу |

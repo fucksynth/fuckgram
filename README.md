@@ -5,8 +5,8 @@
 [ English | [Русский](README-RU.md) ]
 
 A Telegram Desktop client with plugins on Lua. Based on
-[AyuGram Desktop](https://github.com/AyuGram/AyuGramDesktop) 7.2.9, which is
-based on [Telegram Desktop](https://github.com/telegramdesktop/tdesktop).
+[Telegram Desktop](https://github.com/telegramdesktop/tdesktop) 7.4.6 with
+everything from [AyuGram Desktop](https://github.com/AyuGram/AyuGramDesktop).
 
 [![Windows](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml/badge.svg?branch=release)](https://github.com/fucksynth/fuckgram/actions/workflows/win.yml)
 [![Release](https://img.shields.io/github/v/release/fucksynth/fuckgram?label=release)](https://github.com/fucksynth/fuckgram/releases/latest)
@@ -15,10 +15,9 @@ Channel: [@fuckgramdesktop](https://t.me/fuckgramdesktop) ·
 Plugins: [@fuckgramplugins](https://t.me/fuckgramplugins) ·
 [Official plugins](https://github.com/fucksynth/fuckgram-plugins)
 
-> **Status.** Windows x64. The current version is
-> [7.2.9](https://github.com/fucksynth/fuckgram/releases/latest); it updates
-> itself. Next: the move to Telegram Desktop 7.4.6 (Qt 6, Windows 10 and
-> newer). Linux and macOS are not built yet.
+> **Status.** Windows 10 and newer, x64 (Qt 6). The current version is
+> [7.4.6](https://github.com/fucksynth/fuckgram/releases/latest); it updates
+> itself. Linux and macOS are not built yet.
 
 ## Download
 
@@ -87,7 +86,7 @@ client shows them.
 | Plugin | What it does |
 |---|---|
 | Material Player | the music player as a Material 3 card over the window |
-| Pixel Cat | a pixel cat walks around the window; pet it |
+| Pixel Cat | a pixel cat of 8 breeds walks around the window; pet it, carry it with the mouse |
 | Link Cleaner | strips trackers (`utm_*`, `fbclid`, `si`…) from links you send |
 | Calculator | `2+2*2=` is sent as `2+2*2 = 6` |
 | Exchange Rates | `/cur 100 usd rub` sends the amount at today's rate |
