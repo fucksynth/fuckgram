@@ -14,8 +14,10 @@ Nothing reaches users until a release is published by hand.
 2. CI builds Release, stamps it with its commit
    (`Telegram/SourceFiles/fuckgram/fuckgram_build.h`) and makes a **draft**
    release: tag `7.2.10` on that commit, title "fuckgram Desktop 7.2.10",
-   `fuckgram-v7.2.10-win-x64-portable.zip`, and the commits since the last
-   release as notes. A draft of the same version made before is replaced.
+   `fuckgram-v7.2.10-win-x64-portable.zip` and the notes: the file
+   `docs/releases/7.2.10.md` when there is one (commit it before step 1),
+   else up to 40 latest commits since the last release. A draft of the same
+   version made before is replaced.
 3. Download the zip from the draft and check it.
 4. Edit the notes (they are the "What's new" window in the client: headings,
    `**bold**`, lists and links are shown) and **Publish**. "Set as a

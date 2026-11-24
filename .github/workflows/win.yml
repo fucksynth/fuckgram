@@ -392,14 +392,22 @@ jobs:
           ZIP="fuckgram-v$VERSION-win-x64-portable.zip"
           (cd artifact && zip -9 -X "../$ZIP" "$EXE")
 
+          # Notes written for the version (docs/releases/<version>.md) go
+          # as they are; without them, our latest commits. Never the whole
+          # log since the last release: a Telegram Desktop update brings
+          # thousands of upstream commits.
           PREVIOUS="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
           {
-            echo "Added:"
-            echo
-            if [ -n "$PREVIOUS" ] && git rev-parse -q --verify "refs/tags/$PREVIOUS" > /dev/null; then
-              git log --no-merges --format='- %s' "$PREVIOUS..$GITHUB_SHA"
+            if [ -f "docs/releases/$VERSION.md" ]; then
+              cat "docs/releases/$VERSION.md"
             else
-              git log --no-merges --format='- %s' -n 30 "$GITHUB_SHA"
+              echo "Added:"
+              echo
+              if [ -n "$PREVIOUS" ] && git rev-parse -q --verify "refs/tags/$PREVIOUS" > /dev/null; then
+                git log --no-merges --format='- %s' -n 40 "$PREVIOUS..$GITHUB_SHA"
+              else
+                git log --no-merges --format='- %s' -n 30 "$GITHUB_SHA"
+              fi
             fi
             echo
             echo "commits: https://github.com/$GITHUB_REPOSITORY/commits/$VERSION"
